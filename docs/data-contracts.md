@@ -98,7 +98,10 @@ Writer: `bench/run_bench.py`, run by hand. One line per bench run.
 | `vs_previous` | object | `minutes`, `cost_usd`, `turns` differences to the last `ok` run, `first_pass_was` |
 | `scratch_repo` | string | `deleted`, or the repo name if it could not be deleted |
 
-Example: see the first real run in `data/bench.jsonl` (added at checkpoint Q2).
+Example (first real run):
+```json
+{"acceptance_ok": true, "ci_failed": [], "ci_state": "success", "cost_usd": 0.14658870000000002, "dispatch_ok": true, "first_pass": true, "minutes": 0.64, "rework_runs": 0, "scratch_repo": "deleted", "status": "ok", "task": "add a /version endpoint with a test", "template_ref": "feat/quality-guards", "template_sha": "676984a", "ts": "2026-11-20T13:30:41Z", "turns": 19}
+```
 
 ## Mutation JSON (`mutation.json`)
 

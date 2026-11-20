@@ -52,9 +52,9 @@ def wait_ci(g: Gitea, repo: str, branch: str) -> tuple[str, list[str]]:
 
 def acceptance(wt: Path) -> bool:
     """Independent check of the result: the endpoint exists and returns exactly the package version."""
-    code = ("from fastapi.testclient import TestClient\nfrom app.main import create_app\nimport importlib.metadata as m\n"
+    code = ("from fastapi.testclient import TestClient\nfrom app.main import create_app\nimport tomllib\n"
             "c=TestClient(create_app())\nr=c.get('/version')\n"
-            "assert r.status_code==200 and r.json()=={'version': m.version('app')}, r.text\n"
+            "assert r.status_code==200 and r.json()=={'version': tomllib.load(open('pyproject.toml','rb'))['project']['version']}, r.text\n"
             "assert c.post('/version').status_code==405\nprint('ACCEPTED')")
     res = subprocess.run(["uv", "run", "python", "-c", code], cwd=wt, capture_output=True, text=True,
                          env=dict(os.environ, PYTHONPATH="src"))
@@ -131,6 +131,8 @@ def main() -> int:
                 result["rework_dispatch_ok"] = run2["rc"] == 0
                 if run2["rc"] != 0:
                     result["rework_error"] = run2["tail"][-300:]
+                state2, failed2 = wait_ci(g, repo, "agent/issue-1")
+                result.update(final_ci_state=state2, final_ci_failed=failed2)
                 result["minutes"] = round(result["minutes"] + (run2.get("duration_s") or 0) / 60, 2)
                 result["cost_usd"] = round((result["cost_usd"] or 0) + (run2.get("cost_usd") or 0), 4)
                 result["turns"] = (result["turns"] or 0) + (run2.get("turns") or 0)
