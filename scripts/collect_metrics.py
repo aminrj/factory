@@ -111,6 +111,19 @@ def agent_totals() -> dict[str, float]:
     }
 
 
+def human_minutes_override() -> dict:
+    """Minutes recorded at each /go (data/human_minutes.jsonl) win over the PR tables, which are filled from them."""
+    path = DATA / "human_minutes.jsonl"
+    rows = [json.loads(x) for x in path.read_text().splitlines() if x.strip()] if path.exists() else []
+    if not rows:
+        return {}
+    by_gate = dict.fromkeys(GATES, 0)
+    for r in rows:
+        if r["gate"] in by_gate:
+            by_gate[r["gate"]] += r["minutes"]
+    return {"human_minutes_total": sum(by_gate.values()), "human_minutes_by_gate": by_gate}
+
+
 def summarize(records: list[dict], escaped: dict[str, int]) -> dict:
     agent = [r for r in records if r["agent_branch"]]
     minutes_by_gate = {
@@ -128,6 +141,7 @@ def summarize(records: list[dict], escaped: dict[str, int]) -> dict:
         "median_lead_hours": statistics.median(r["lead_hours"] for r in agent) if agent else None,
         "human_minutes_total": total_minutes,
         "human_minutes_by_gate": {g: sum(v) for g, v in minutes_by_gate.items()},
+        **human_minutes_override(),
         "escaped_bugs": sum(escaped.values()),
         **agent_totals(),
     }
