@@ -122,3 +122,24 @@ Example:
 ```json
 {"files": [{"file": "src/app/services/calc.py", "killed": 0, "score_percent": 0.0, "status": "complete", "survived": 3, "survivors": [{"code": "return a + b", "line": 4, "status": "bad_survived"}]}], "mode": "warn", "target_percent": 60, "time_limit_minutes": 10}
 ```
+
+## `data/runs.jsonl`
+
+Writer: written by hand (or by the session that ran the check), one line per manual check run on an app after it is built.
+Not produced by a timer. Checks that were not run are not written; they are listed in the retro.
+
+| Field | Type | Unit / values |
+|---|---|---|
+| `ts` | string | UTC time the check finished |
+| `repo`, `ref` | string | app repo and the commit that was run |
+| `env` | string | `devbox-container`, `phone`, `cluster` |
+| `model`, `model_source` | string or null | model name and where it came from; null when no model is involved |
+| `check` | string | short snake_case name of the check |
+| `result` | string | `pass` or `fail` |
+| `seconds` | number or null | wall time of the check |
+| `note` | string | one or two sentences: what was seen, what was overridden. No letter text, no secrets |
+
+Example:
+```json
+{"check": "decode_fixture_letter", "env": "devbox-container", "model": "qwen3.8-27b-agent", "note": "timeout 180 s set inside the container only", "ref": "249c09b", "repo": "brevkoll", "result": "pass", "seconds": 7.5, "ts": "2026-11-20T18:50:00Z"}
+```
