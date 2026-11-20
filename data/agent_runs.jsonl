@@ -10,3 +10,4 @@
 {"ts": "2026-11-20T17:22:35Z", "repo": "brevkoll", "issue": 1, "step": "implement", "duration_s": 26.9, "cost_usd": 0.0864323, "turns": 12, "is_error": false, "fallback": false}
 {"ts": "2026-11-20T17:25:41Z", "repo": "brevkoll", "issue": 1, "step": "implement", "duration_s": 26.0, "cost_usd": 0.10200129999999999, "turns": 10, "is_error": false, "fallback": false}
 {"ts": "2026-11-20T17:26:22Z", "repo": "brevkoll", "issue": 1, "step": "implement", "duration_s": 9.9, "cost_usd": 0.0943107, "turns": 3, "is_error": false, "fallback": false}
+{"ts": "2026-11-20T17:27:33Z", "repo": "brevkoll", "issue": 1, "step": "validate", "duration_s": 39.4, "cost_usd": 0.2089417, "turns": 16, "is_error": false, "fallback": false}
