@@ -38,8 +38,9 @@ WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
 HQ = Path(__file__).resolve().parent.parent
 DATA = HQ / "data"
 STATE = WORK / "state"
-GO = re.compile(r"^\s*/go(?:\s+minutes=(\d+))?\s*$", re.IGNORECASE)
-STOP = re.compile(r"^\s*/stop\s*$", re.IGNORECASE)
+# The command is the first line. Extra lines after it (a note to me) are allowed and ignored.
+GO = re.compile(r"^\s*/go(?:[ \t]+minutes=(\d+))?[ \t]*(?:\r?\n|$)", re.IGNORECASE)
+STOP = re.compile(r"^\s*/stop[ \t]*(?:\r?\n|$)", re.IGNORECASE)
 CP_PREFIX = "🛑 CHECKPOINT"
 CLAIM_PREFIX = "▶"
 MARKER = re.compile(r"<!--factory:(.*?)-->", re.DOTALL)
@@ -143,7 +144,7 @@ class Ctx:
 
     # -- links and files
     def url(self, path: str = "") -> str:
-        return f"{self.g.repo_url(self.repo)}{path}"
+        return f"{self.g.repo_url(self.repo).removesuffix('.git')}{path}"
 
     def file_link(self, name: str) -> str:
         return self.url(f"/src/branch/{self.branch}/thoughts/{self.n}/{name}")
@@ -288,9 +289,11 @@ def after_gate1(ctx: Ctx) -> None:
 
 def after_gate2(ctx: Ctx) -> None:
     tm = ctx.branch_file("threat-model.md")
-    left = len(re.findall(r"\bPROPOSED\b", tm))
-    if left:
-        raise NeedsHuman(f"`threat-model.md` still has {left} `PROPOSED`. Decide them, push, then reply `/go` again: "
+    hits = [(i, line) for i, line in enumerate(tm.splitlines(), 1) if re.search(r"\bPROPOSED\b", line)]
+    if hits:
+        shown = "\n".join(f"- line {i}: {line.strip()[:110]}" for i, line in hits[:10])
+        raise NeedsHuman(f"`threat-model.md` still contains the word `PROPOSED` {len(hits)} time(s). The gate refuses any "
+                         f"occurrence, also in prose, so replace each with your decision (or reword it):\n\n{shown}\n\n"
                          f"{ctx.file_link('threat-model.md')}")
     ctx.record_minutes("threat_model")
     dispatch(ctx, "research")
