@@ -1,0 +1,9 @@
+[Unit]
+Description=Factory quality: lookback review of apps shipped 14 and 30 days ago
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v24.14.1/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/git/software-factory/factory
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/lookback.py
+TimeoutStartSec=3h

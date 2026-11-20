@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "platform": "gitea",
+  "timezone": "Europe/Stockholm",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 3,
+  "labels": ["dependencies"],
+  "dependencyDashboard": false,
+  "lockFileMaintenance": { "enabled": true, "schedule": ["before 6am on the first day of the month"] },
+  "packageRules": [
+    { "matchManagers": ["pep621"], "matchDepTypes": ["dependency-groups"], "groupName": "dev tools", "automerge": false },
+    { "matchUpdateTypes": ["major"], "labels": ["dependencies", "major"] }
+  ],
+  "automerge": false,
+  "platformAutomerge": false,
+  "commitMessagePrefix": "chore(deps):"
+}

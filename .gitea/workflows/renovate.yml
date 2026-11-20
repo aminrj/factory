@@ -1,0 +1,29 @@
+name: renovate
+# Runs Renovate against the repos with topic `factory-app`. NOT ACTIVE until the human has created the bot user and
+# the repository secret RENOVATE_TOKEN (see docs/renovate.md). Renovate only opens PRs; it never merges (automerge is false).
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+env:
+  RENOVATE_VERSION: "44.198.0"     # pinned (npm, released 2026-10-29); update deliberately, requires Node ^24.11
+
+jobs:
+  renovate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run Renovate (pinned version, token from a secret)
+        env:
+          RENOVATE_PLATFORM: gitea
+          RENOVATE_ENDPOINT: ${{ vars.GITEA_URL }}/api/v1/
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          RENOVATE_AUTODISCOVER: "true"
+          RENOVATE_AUTODISCOVER_TOPICS: factory-app
+          RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate-bot@users.noreply.local>"
+          RENOVATE_ONBOARDING: "false"
+          RENOVATE_REQUIRE_CONFIG: "optional"
+          RENOVATE_CONFIG_FILE: renovate.json
+          LOG_LEVEL: info
+        run: npx --yes "renovate@${RENOVATE_VERSION}"
