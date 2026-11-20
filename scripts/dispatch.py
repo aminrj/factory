@@ -74,11 +74,24 @@ def human_identity(main: Path) -> tuple[str, str]:
     return run("git", "config", "user.name", cwd=main), run("git", "config", "user.email", cwd=main)
 
 
+def check_holdout_formatted(wt: Path) -> None:
+    """The holdout files are the human's. If they are not ruff-format clean, an agent's `ruff format .` rewrites them,
+    the holdout guard refuses the commit, and the step fails (seen on brevkoll#1). Make the human fix it first."""
+    if not (wt / "tests" / "holdout").is_dir():
+        return
+    res = subprocess.run(["uv", "run", "ruff", "format", "--check", "tests/holdout"], cwd=wt,
+                         capture_output=True, text=True, check=False)
+    if res.returncode == 1:
+        die("tests/holdout is not ruff-format clean. Run `uv run ruff format tests/holdout` and commit it as yourself "
+            "(Gate 1), otherwise the agent's formatter will touch your files and the guard will refuse the step.")
+
+
 def check_entry(step: str, wt: Path, n: int, human_email: str) -> None:
     t = wt / "thoughts" / str(n)
     if not (t / "spec.md").exists():
         die(f"thoughts/{n}/spec.md is missing (Gate 1).")
     if step in ("research", "plan", "implement", "validate"):
+        check_holdout_formatted(wt)
         tm = t / "threat-model.md"
         if not tm.exists():
             die("threat-model.md is missing (run threat-model first).")
