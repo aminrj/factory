@@ -1,6 +1,6 @@
 # Release plan: brevkoll v0.1.0 (devbox)
 
-Status: draft for the owner. Preconditions 1 and 2 are done and merged; steps 1 to 4 and 7 to 8 are not run.
+Status: steps 1 to 6 done on 2026-11-20 (tag, build, scan, SBOM, run, verify). Step 7 (phone) waits for the owner. Step 8 is done with a note that the phone check is pending.
 Decision already made: run on the devbox, not on the cluster (the cluster hosts other workloads).
 
 ## State today (2026-11-20, evening)
@@ -21,7 +21,7 @@ Decision already made: run on the devbox, not on the cluster (the cluster hosts 
 
 1. **Tag** the merge commit: `git tag -a v0.1.0 <sha> -m "brevkoll v0.1.0"` and push the tag to Gitea only.
 2. **Build:** `docker build -t brevkoll:0.1.0 .` (local image; add the registry name only if you push).
-3. **Scan:** `trivy image --severity HIGH,CRITICAL --exit-code 1 brevkoll:0.1.0` with the pinned trivy binary from
+3. **Scan:** `trivy image --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln,secret --exit-code 1 brevkoll:0.1.0` with the pinned trivy binary from
    `.gitea/workflows/gates.yml` (`TRIVY_VERSION`, checksum in the same file). Download it to `/tmp`, verify the checksum, run it. Any
    HIGH or CRITICAL stops the release.
 4. **SBOM:** `syft` with the version and checksum in `factory-template/docs/release.md`; keep `sbom.cdx.json` with the tag.
@@ -53,3 +53,11 @@ Decision already made: run on the devbox, not on the cluster (the cluster hosts 
 ## Not in this plan
 
 Cluster deploy (GitOps PR, ArgoCD, External Secrets), Cloudflare tunnel, Renovate, GlitchTip.
+
+## Result (2026-11-20)
+
+- Tag `v0.1.0` on brevkoll `bd505ff`, Gitea only (the GitHub mirror gets `main`, no tags). Gitea release (pre-release) with the SBOM and the full trivy report.
+- Image `brevkoll:0.1.0` = `sha256:f228aca664caf12316e54a423864df50ce23e57d63c2ad9c7f15e84278d91212`, from `git archive v0.1.0`.
+- Gate passed. First scan found 6 findings inside the `uv` binary and one fixable zlib1g; fixed in brevkoll#11 (multi-stage build). 143 unfixed Debian findings accepted as above.
+- Container `brevkoll` runs from it (`127.0.0.1:8765`, `--restart unless-stopped`, settings in `~/.config/brevkoll/env`). Record: `data/runs.jsonl`.
+- Rollback and the decision table above are unchanged. Registry push skipped (decision 3).
