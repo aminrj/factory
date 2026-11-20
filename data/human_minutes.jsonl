@@ -4,3 +4,4 @@
 {"ts": "2026-11-20T18:03:30+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 1, "comment_id": 191}
 {"ts": "2026-11-20T18:09:44+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 1, "comment_id": 197}
 {"ts": "2026-11-20T18:25:14+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 1, "comment_id": 230}
+{"ts": "2026-11-20T20:00:29+01:00", "repo": "brevkoll", "issue": 1, "gate": "code_review", "minutes": 1, "comment_id": 251}
