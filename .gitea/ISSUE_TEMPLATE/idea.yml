@@ -1,0 +1,50 @@
+name: App idea
+description: Drop an idea into the factory queue
+title: "[idea] "
+labels: ["idea"]
+body:
+  - type: input
+    id: user
+    attributes:
+      label: Real user
+      description: The named person who will use v1. No name, no build.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What they do today and why it is annoying. Two or three sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: shipped
+    attributes:
+      label: What "shipped" means
+      description: The one thing the user can do in v1, on a public URL.
+    validations:
+      required: true
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options: ["S (8h)", "M (16h)"]
+    validations:
+      required: true
+  - type: textarea
+    id: kill
+    attributes:
+      label: Kill criteria
+      description: For example "no use by the named user 14 days after ship".
+    validations:
+      required: true
+  - type: textarea
+    id: ai_security
+    attributes:
+      label: AI and security angle
+      description: Where untrusted input meets a model or a tool. This is the talk hook.
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: Conversation, talk URL, or my own itch.
