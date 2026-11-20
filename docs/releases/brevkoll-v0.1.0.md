@@ -1,23 +1,21 @@
 # Release plan: brevkoll v0.1.0 (devbox)
 
-Status: draft for the owner. Nothing here has been run except the checks marked done.
+Status: draft for the owner. Preconditions 1 and 2 are done and merged; steps 1 to 4 and 7 to 8 are not run.
 Decision already made: run on the devbox, not on the cluster (the cluster hosts other workloads).
 
-## State today (2026-11-20)
+## State today (2026-11-20, evening)
 
-- `brevkoll` `main` is at `622afe4` (v1 code plus the real README). CI green. No tags, no registry image.
-- A container from `249c09b` runs on `127.0.0.1:8765` with two overrides that are not in the code (timeout 180 s, tokens 3000)
-  and a localhost relay (`/tmp/bk-relay`, port 18091) that adds the model's API key. Both are stopgaps.
+- `brevkoll` `main` is at `1a53dde`: v1 code, the real README, configurable model timeout and token cap, optional `LLM_API_KEY`
+  (brevkoll#9), base images pinned by digest (brevkoll#10). CI green. No tag, no registry image.
+- A container `brevkoll` (image `brevkoll:0.1.0-rc1`, built from `1a53dde`) runs on `127.0.0.1:8765` with the real settings from
+  `~/.config/brevkoll/env` (mode 0600). No overrides, no relay. Results: `data/runs.jsonl` (5 lines, all pass; fixture letter in 6.9 s).
 - Gitea's container registry is enabled (`/v2/` answers 401). `trivy` and `syft` are not installed on the devbox.
-- `Dockerfile` pulls `python:3.12-slim` and `ghcr.io/astral-sh/uv:latest` by tag. `latest` is not pinned.
 
-## What must be true before the tag
+## What had to be true before the tag
 
-1. **brevkoll#4 (timeout and token cap from env) and #5 (`LLM_API_KEY`) are merged.** Without them the release depends on the
-   overrides and the relay above. Build them through the factory (label the issue `stage/spec-ready`) or by hand.
-2. **Pin both base images by digest** in the `Dockerfile` (`FROM python:3.12-slim@sha256:...`, `uv` copied from a pinned tag
-   with digest). Human PR; the agent must not touch it without a plan.
-3. Decision on the model (see "Decisions").
+1. DONE: brevkoll#4 and #5 (merged in brevkoll#9).
+2. DONE: base images pinned by digest (brevkoll#10).
+3. OPEN: the owner's decisions below.
 
 ## Steps
 
