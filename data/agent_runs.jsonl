@@ -1,3 +1,4 @@
 {"ts": "2026-11-20T08:53:49Z", "repo": "brevkoll", "issue": 1, "step": "threat-model", "duration_s": 49.1, "cost_usd": 0.14202030000000002, "turns": 9, "is_error": false, "fallback": false}
 {"ts": "2026-11-20T10:18:40Z", "repo": "brevkoll", "issue": 1, "step": "research", "duration_s": 55.6, "cost_usd": 0.2168859, "turns": 9, "is_error": false, "fallback": false}
 {"ts": "2026-11-20T17:02:23Z", "repo": "brevkoll", "issue": 1, "step": "plan", "duration_s": 73.7, "cost_usd": 0.23981220000000003, "turns": 9, "is_error": false, "fallback": false}
+{"ts": "2026-11-20T17:07:34Z", "repo": "brevkoll", "issue": 1, "step": "implement", "duration_s": 243.0, "cost_usd": 0.8652161, "turns": 66, "is_error": false, "fallback": false}

@@ -1,6 +1,6 @@
 # Board
 
-_Generated 2026-11-20 17:02 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-20 17:07 UTC by `scripts/collect_metrics.py`._
 
 ## idea
 
@@ -12,13 +12,13 @@ _Generated 2026-11-20 17:02 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| brevkoll v1: letter decoder | brevkoll#1 |
+| (none) | |
 
 ## building
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| brevkoll v1: letter decoder | brevkoll#1 |
 
 ## shipped
 

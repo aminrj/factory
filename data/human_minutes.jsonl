@@ -1,3 +1,4 @@
 {"ts":"2026-11-20T08:30:00+01:00","repo":"brevkoll","issue":1,"gate":"spec","minutes":90,"comment_id":85}
 {"ts": "2026-11-20T11:17:44+01:00", "repo": "brevkoll", "issue": 1, "gate": "threat_model", "minutes": 10, "comment_id": 113}
 {"ts": "2026-11-20T18:01:09+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 2, "comment_id": 182}
+{"ts": "2026-11-20T18:03:30+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 1, "comment_id": 191}
