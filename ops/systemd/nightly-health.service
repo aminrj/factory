@@ -1,0 +1,9 @@
+[Unit]
+Description=Factory quality: nightly code-health snapshot and baseline tightening
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v24.14.1/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/git/software-factory/factory
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/nightly_health.py
+TimeoutStartSec=2h
