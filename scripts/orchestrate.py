@@ -356,12 +356,14 @@ def build(ctx: Ctx) -> None:
                         f"{st.get('phases_done', 0)} of {n_ph} phases done.")
             notify(f"{ctx.app}: timebox 80%", f"{hours:.1f} h of {TIMEBOX_H:g} h used", priority=4)
         dispatch(ctx, "implement")
+        # Count the phase as soon as its commit exists. If CI is red and the rework run fails, a retry must not
+        # dispatch another implement run for a phase that is already built (it would make no commit and fail).
+        st["phases_done"] = st.get("phases_done", 0) + 1
+        ctx.save(st)
         want = ("checks", "gates", "security")
         res = ci_wait(ctx, want)
         if failing(res, want):
             rework(ctx, res, want)
-        st["phases_done"] = st.get("phases_done", 0) + 1
-        ctx.save(st)
     validate_and_checkpoint(ctx)
 
 

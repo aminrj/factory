@@ -224,7 +224,7 @@ def main() -> None:
     pr = next((p for p in prs if p["head"]["ref"] == branch), None)
     if pr is None:
         pr = g.call("POST", f"/repos/{repo}/pulls", {
-            "head": branch, "base": "main", "title": f"WIP: issue #{n}", "body": f"Closes #{n}"})
+            "head": branch, "base": "main", "title": f"WIP: issue #{n}", "body": f"Refs #{n}"})
     summary = str(result.get("result", ""))[:3500]
     g.comment(repo, n, f"Agent step `{step}` finished in {duration / 60:.1f} min "
                        f"(cost {record['cost_usd']} USD). PR: #{pr['number']}\n\n{summary}")
