@@ -44,7 +44,8 @@ class Gitea:
         self._token = TOKEN_FILE.read_text().strip()
         self.user: str = self.get("/user")["login"]
 
-    def call(self, method: str, path: str, body: Any = None, ok: tuple[int, ...] = (200, 201, 204)) -> Any:
+    def call(self, method: str, path: str, body: Any = None, ok: tuple[int, ...] = (200, 201, 204),
+             text: bool = False) -> Any:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(
             f"{self.base}/api/v1{path}", data=data, method=method,
@@ -59,6 +60,8 @@ class Gitea:
             status = err.code
         if status not in ok:
             raise GiteaError(f"{method} {path} -> {status}: {raw[:300].decode(errors='replace')}")
+        if text:
+            return raw.decode(errors="replace")
         return json.loads(raw) if raw.strip() else None
 
     def get(self, path: str) -> Any:
