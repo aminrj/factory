@@ -64,6 +64,44 @@ class BuildCounterTests(unittest.TestCase):
         self.assertEqual(ctx.state()["phases_done"], 2)
 
 
+class LogExcerptTests(unittest.TestCase):
+    RAW = (
+        "2026-11-20T20:07:16.9902272Z ::group::Run gitleaks\n"
+        "2026-11-20T20:07:18.0140201Z [90m8:07PM[0m [32mINF[0m scan\n"
+        "2026-11-20T20:07:18.0630816Z RuleID:      generic-api-key\n"
+        "2026-11-20T20:07:18.0631223Z File:        tests/unit/test_model_settings.py\n"
+        "2026-11-20T20:07:18.0631366Z Email:       someone@example.com\n"
+        "2026-11-20T20:07:18.0631367Z Authorization: Bearer abc123\n"
+        "2026-11-20T20:07:18.1744180Z ##[error]Process completed with exit code 1.\n"
+        "2026-11-20T20:07:18.1756583Z Run Post actions/checkout\n"
+        "2026-11-20T20:07:19.1380165Z Job failed\n"
+    )
+
+    def test_excerpt_ends_at_the_error_and_is_clean(self) -> None:
+        out = orchestrate.log_excerpt(self.RAW)
+        self.assertIn("File:        tests/unit/test_model_settings.py", out)
+        self.assertTrue(out.endswith("exit code 1."))
+        self.assertNotIn("Post actions", out)
+        self.assertNotIn("2026-11-20T", out)
+        self.assertNotIn("\x1b", out)
+        self.assertNotIn("[90m", out)
+
+    def test_secrets_and_emails_are_scrubbed(self) -> None:
+        out = orchestrate.log_excerpt(self.RAW)
+        self.assertNotIn("abc123", out)
+        self.assertNotIn("someone@example.com", out)
+
+    def test_excerpt_is_capped(self) -> None:
+        raw = "\n".join(f"line {i}" for i in range(500)) + "\n##[error]boom"
+        self.assertLessEqual(len(orchestrate.log_excerpt(raw).splitlines()), 60)
+
+    def test_api_errors_do_not_break_the_rework(self) -> None:
+        ctx = FakeCtx()
+        ctx.g.get = mock.Mock(side_effect=RuntimeError("403"))  # type: ignore[attr-defined]
+        with mock.patch.object(orchestrate, "log"):
+            self.assertEqual(orchestrate.failing_logs(ctx, "abc", ["security"]), "")  # type: ignore[arg-type]
+
+
 class PrBodyTests(unittest.TestCase):
     def test_pr_body_does_not_use_a_closing_keyword(self) -> None:
         src = (ROOT / "scripts" / "dispatch.py").read_text()
