@@ -18,6 +18,8 @@ Rules (the human only clicks the link):
     LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, optional LLM_API_KEY and LLM_TLS_*_FILE). Keys starting with STAGING_ are
     for this script and are not passed on: STAGING_HOST (name shown in the link; default: the tailnet IP).
     ~/.config/factory/apps/<app>.env adds app-specific settings. Both files are mode 0600 and never tracked.
+    Do not copy a secret into them: `LLM_API_KEY_FILE=<path>` makes stage.py read the key from its source file.
+    `scripts/doctor.py` checks all of this.
   - The URL is only ever written to Gitea comments and the ignored state/ folder, never to a tracked file.
 Contract for an app image: starts with a CMD that has `--host` and `--port`, serves /healthz, writes only to /tmp
 and /data, runs as a non-root user.
@@ -75,6 +77,22 @@ def read_env(path: Path) -> dict[str, str]:
                 k, v = line.split("=", 1)
                 out[k.strip()] = v.strip().strip("\"'")
     return out
+
+
+SECRET_FILES = {"LLM_API_KEY_FILE": "LLM_API_KEY"}  # a secret may be referenced by file instead of copied into the env file
+
+
+def load_model_env(app: str) -> dict[str, str]:
+    """staging.env plus apps/<app>.env, with referenced secret files read in. The values stay in memory."""
+    env = read_env(CONF / "staging.env")
+    env.update(read_env(CONF / "apps" / f"{app}.env"))
+    for ref, name in SECRET_FILES.items():
+        if ref in env:
+            path = Path(env.pop(ref)).expanduser()
+            if not path.is_file():
+                raise StageError(f"{ref} points at {path}, which does not exist. Run scripts/doctor.py.")
+            env[name] = path.read_text().strip()
+    return env
 
 
 def tailnet_ip() -> str:
@@ -187,8 +205,7 @@ def up(app: str, issue: int | None = None, ref: str | None = None) -> dict:
     sha, label = resolve_target(g, repo, clone, issue, ref)
     require_green(g, repo, sha, clone)
 
-    model = read_env(CONF / "staging.env")
-    model.update(read_env(CONF / "apps" / f"{app}.env"))
+    model = load_model_env(app)
     if not model.get("LLM_BASE_URL"):
         raise StageError(f"No model configured: put LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL in {CONF / 'staging.env'}")
     host_name = model.pop("STAGING_HOST", "") or tailnet_ip()
