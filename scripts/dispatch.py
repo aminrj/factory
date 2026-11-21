@@ -51,6 +51,17 @@ def die(msg: str) -> None:
     raise SystemExit(f"REFUSED: {msg}")
 
 
+DECLINED_EXIT = 3
+
+
+def declined(step: str, reply: str) -> None:
+    """The agent ran, changed nothing and said why (a phase that waits for the owner, a question, nothing left to do).
+    Repeating the step gives the same answer, so this is not a failure to retry: exit 3 and print the agent's own words,
+    which the orchestrator turns into a question for the owner."""
+    print(f"The agent made no change in `{step}` and said:\n\n{reply.strip()[-1500:] or '(no reply)'}", file=sys.stderr)
+    raise SystemExit(DECLINED_EXIT)
+
+
 def agent_env() -> dict[str, str]:
     env = dict(os.environ)
     env.update(GIT_AUTHOR_NAME=AGENT, GIT_AUTHOR_EMAIL=AGENT_EMAIL,
@@ -112,6 +123,13 @@ def check_entry(step: str, wt: Path, n: int, human_email: str, login: str = "") 
             die(f"'Status: approved' was set by {name} <{email}>, not by the human.")
 
 
+NO_CONDITIONAL_PHASES = (
+    "Never write a phase that depends on an unanswered question or on the human's later approval (for example 'only if the "
+    "human approves ...'): the builder cannot start it and the build stops there. Every phase is either in scope or it goes "
+    "under a final '## Deferred' heading, which is not a phase, with the question that blocks it."
+)
+
+
 def plan_revision_prompt(n: int, repo: str, branch: str) -> str:
     return (
         f"You are the factory agent for issue #{n} in repo {repo}, on branch {branch} in a git worktree.\n"
@@ -121,6 +139,7 @@ def plan_revision_prompt(n: int, repo: str, branch: str) -> str:
         f"Then follow .claude/commands/plan.md with $ARGUMENTS = {n}, but start from the existing plan.md: keep the owner's own "
         "edits unless their feedback says otherwise, apply the feedback, and update the ADRs and contracts that change. "
         "If the owner asked for alternatives (for example other colours), put the proposal in the plan and say why. "
+        + NO_CONDITIONAL_PHASES + " "
         "Set `Status: draft` at the top (the owner may have left it at `rework`); never write `Status: approved`. "
         "Do not run git push. Finish with a short review guide: what you changed because of the feedback, and what you did not."
     )
@@ -215,8 +234,8 @@ def main() -> None:
             "the code. Do not start a new phase. Never weaken a check, test or ignore rule. Do not run git push. "
             f"Commit with message `#{n} rework: <summary>`. Finish with a short review guide."
         )
-    if args.note and step == "plan":
-        prompt = plan_revision_prompt(n, args.repo, branch)
+    if step == "plan":
+        prompt = plan_revision_prompt(n, args.repo, branch) if args.note else prompt + " " + NO_CONDITIONAL_PHASES
     cmd = ["claude", "-p", "--output-format", "json", "--max-budget-usd", MAX_BUDGET,
            "--setting-sources", "project", "--strict-mcp-config", "--allowedTools", ALLOWED]
     t0 = time.time()
@@ -241,7 +260,7 @@ def main() -> None:
         run("git", "add", "-A", cwd=wt, env=agent_env())
         run("git", "commit", "-q", "-m", f"#{n} {step}: agent output", cwd=wt, env=agent_env())
     if run("git", "rev-parse", "HEAD", cwd=wt) == head_before:
-        die("the agent produced no commit.")
+        declined(step, str(result.get("result") or ""))
 
     bad = agent_forbidden(wt, n)
     if bad:

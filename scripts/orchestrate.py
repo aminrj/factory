@@ -66,6 +66,15 @@ class NeedsHuman(Exception):
     """The human must change something (for example a PROPOSED row is left). Not counted as a retry."""
 
 
+class AgentDeclined(NeedsHuman):
+    """The agent changed nothing and explained why. Asking the owner is the only useful next step: a retry repeats it."""
+
+    def __init__(self, step: str, said: str):
+        super().__init__(f"{said}\n\nRunning `{step}` again would give the same answer, so I did not retry it. Decide what the "
+                         "agent is waiting for (change `plan.md`, answer in a comment, or `/stop`), then reply `/go`.")
+        self.step = step
+
+
 class Stop(Exception):
     pass
 
@@ -247,12 +256,15 @@ def dispatch(ctx: Ctx, step: str, note: str | None = None) -> str:
     except subprocess.TimeoutExpired as e:
         raise StepFailed(f"`{step}` timed out") from e
     out = (res.stdout + res.stderr).strip()
+    if res.returncode == DECLINED_EXIT:
+        raise AgentDeclined(step, out)
     if res.returncode != 0:
         raise StepFailed(f"`{step}` failed:\n{out[-1500:]}")
     log(f"{ctx.app}#{ctx.n}: dispatch {step}: {out.splitlines()[-1] if out else 'ok'}")
     return out
 
 
+DECLINED_EXIT = 3  # keep in step with dispatch.py
 CONTEXTS = ("checks", "gates", "security", "holdout")
 
 
@@ -353,7 +365,23 @@ def after_gate2(ctx: Ctx) -> None:
     plan_and_checkpoint(ctx)
 
 
+def answered_since_checkpoint(ctx: Ctx) -> bool:
+    """Did the owner write anything (other than a command) after the checkpoint that this /go answers?"""
+    comments = ctx.g.paged(f"/repos/{ctx.repo}/issues/{ctx.n}/comments")
+    # the checkpoint that asked the questions ("2b"), not a later "interrupted" or "retry" one
+    cp = max((c["id"] for c in comments if c["body"].startswith(f"{CP_PREFIX} 2b:") and c["id"] < ctx.go_id), default=0)
+    return any(c["id"] > cp and c["id"] != ctx.go_id for c in owner_comments(ctx.g, ctx.repo, ctx.n)
+               if not is_command(c["body"]))
+
+
 def after_research_questions(ctx: Ctx) -> None:
+    st = ctx.state()
+    if not answered_since_checkpoint(ctx) and not st.get("nudged_questions"):
+        st["nudged_questions"] = True
+        ctx.save(st)
+        raise NeedsHuman("You have not answered the research questions (no comment from you since they were asked). The planner "
+                         "will keep an unanswered question out of the plan, or park it under `Deferred`. Answer them in a "
+                         "comment on this issue and reply `/go`, or reply `/go` again to continue without answers.")
     ctx.record_minutes("plan_review")
     plan_and_checkpoint(ctx)
 
@@ -708,6 +736,14 @@ def check_stop(ctx: Ctx) -> None:
             raise StopRequested(c["id"])
 
 
+def consecutive_failures(g: Gitea, repo: str, n: int, handler: str) -> int:
+    """Failures of this handler since the last agent step that worked. Two refusals from before a fix, then two successful
+    phases, then a new problem is a first failure, not a third (it was counted as a third on brevkoll#15)."""
+    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+    last_ok = max((c["id"] for c in mine if c["body"].startswith("Agent step")), default=0)
+    return sum(1 for c in mine if c["id"] > last_ok and f"retry-of={handler}" in c["body"])
+
+
 def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
     app = repo.split("/")[1]
     if decide(g, repo, n) is None:
@@ -760,8 +796,7 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         checkpoint(ctx, f"{marker.get('gate', handler)}-fix", "one thing is left for you", str(e), handler)
         return "needs human"
     except StepFailed as e:
-        prior = sum(1 for c in g.paged(f"/repos/{repo}/issues/{n}/comments")
-                    if c["user"]["login"] == g.user and f"retry-of={handler}" in c["body"])
+        prior = consecutive_failures(g, repo, n, handler)
         if prior >= MAX_RETRIES:
             checkpoint(ctx, f"{handler}-failed", "retries used up, a session is needed",
                        f"`{handler}` failed {prior + 1} times. Last error:\n\n```\n{e}\n```", "manual")

@@ -10,7 +10,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_loop_gates import PLAN, WEB_EDITOR, GateTests  # noqa: F401  (WEB_EDITOR used through prepare_build)
+import test_loop_gates as gates
+from test_loop_gates import PLAN
 
 import orchestrate
 
@@ -21,23 +22,23 @@ class Crash(BaseException):
 
 class CrashTests(unittest.TestCase):
     # the harness of the gate tests, without re-running their tests
-    setUp = GateTests.setUp
-    commit_file = GateTests.commit_file
-    fake_ci = GateTests.fake_ci
-    checkpoint = GateTests.checkpoint
-    go = GateTests.go
-    bot = GateTests.bot
-    steps = GateTests.steps
-    prepare_build = GateTests.prepare_build
-    orchestrate_state = GateTests.orchestrate_state
-    AGENT = GateTests.AGENT
+    setUp = gates.GateTests.setUp
+    commit_file = gates.GateTests.commit_file
+    fake_ci = gates.GateTests.fake_ci
+    checkpoint = gates.GateTests.checkpoint
+    go = gates.GateTests.go
+    bot = gates.GateTests.bot
+    steps = gates.GateTests.steps
+    prepare_build = gates.GateTests.prepare_build
+    orchestrate_state = gates.GateTests.orchestrate_state
+    AGENT = gates.GateTests.AGENT
 
     def fake_dispatch(self, ctx: orchestrate.Ctx, step: str, note: str | None = None) -> str:
         if getattr(self, "to_raise", None):
             raise self.to_raise.pop(0)
         if getattr(self, "on_dispatch", None):
             self.on_dispatch(step)
-        return GateTests.fake_dispatch(self, ctx, step, note)
+        return gates.GateTests.fake_dispatch(self, ctx, step, note)
 
     def die_during(self, text: str = "/go minutes=2") -> None:
         """Run one /go in which the process dies, then let the 'OS' release its lock."""
@@ -53,6 +54,7 @@ class CrashTests(unittest.TestCase):
     def test_a_dead_process_is_recovered_with_a_checkpoint_the_owner_can_answer(self) -> None:
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
         self.agent_files["plan"] = PLAN
         self.to_raise = [Crash()]
         self.die_during()
@@ -70,6 +72,7 @@ class CrashTests(unittest.TestCase):
     def test_nothing_is_recovered_while_a_process_still_runs_the_item(self) -> None:
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
         self.to_raise = [Crash()]
         self.die_during()
         orchestrate.STATE.mkdir(exist_ok=True)
@@ -85,6 +88,7 @@ class CrashTests(unittest.TestCase):
         self.assertFalse(orchestrate.recover_interrupted(self.g, "owner/app", 1))  # type: ignore[arg-type]
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
         self.to_raise = [Crash()]
         self.die_during()
         self.assertTrue(orchestrate.recover_interrupted(self.g, "owner/app", 1))  # type: ignore[arg-type]
@@ -93,6 +97,7 @@ class CrashTests(unittest.TestCase):
     def test_an_unexpected_error_does_not_leave_the_item_silent_either(self) -> None:
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
         self.agent_files["plan"] = PLAN
         self.to_raise = [RuntimeError("boom")]  # an ordinary exception: process() reports it and ends
         self.assertEqual(self.go(), "error")
