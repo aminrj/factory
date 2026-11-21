@@ -178,6 +178,44 @@ class SpecApprovalTests(unittest.TestCase):
         self.assertIsNone(self.check([("bot@x", "# Spec\n", "d")]))
 
 
+class ActiveAndMergeTests(unittest.TestCase):
+    def test_idea_issues_are_watched(self) -> None:
+        class G:
+            def paged(self, path: str) -> list[dict]:
+                if "repos/search" in path:
+                    return [{"full_name": "o/app"}]
+                return [{"number": 5, "labels": [{"name": "stage/idea"}]}, {"number": 6, "labels": [{"name": "bug"}]}]
+
+        self.assertEqual(orchestrate.active_issues(G()), [("o/app", 5)])  # type: ignore[arg-type]
+
+    def test_a_merge_is_announced_once_with_its_reason(self) -> None:
+        import json
+        import tempfile
+
+        class G:
+            user = "o"
+
+            def paged(self, path: str) -> list[dict]:
+                return []
+
+            def get(self, path: str) -> list[dict]:
+                return [{"number": 7, "merged": True, "merged_at": "2999-01-01T00:00:00Z", "title": "T", "html_url": "u",
+                         "body": "Refs #1\n\nBecause the gate was blind.\nmore"}]
+
+        sent: list[tuple] = []
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(orchestrate, "STATE", Path(d)), \
+                mock.patch.object(orchestrate, "MERGES", Path(d) / "merges.json"), \
+                mock.patch.object(orchestrate, "notify", side_effect=lambda *a, **k: sent.append(a)), \
+                mock.patch.object(orchestrate, "log"):
+            orchestrate.announce_merges(G())  # type: ignore[arg-type]
+            self.assertEqual(sent, [])  # first run only records the time
+            (Path(d) / "merges.json").write_text(json.dumps({"since": "2000-01-01T00:00:00+00:00", "sent": []}))
+            orchestrate.announce_merges(G())  # type: ignore[arg-type]
+            orchestrate.announce_merges(G())  # type: ignore[arg-type]
+        self.assertEqual(len(sent), 2)  # factory and factory-template, same PR number, announced once each
+        self.assertIn("Because the gate was blind.", sent[0][1])
+
+
 class PrBodyTests(unittest.TestCase):
     def test_pr_body_does_not_use_a_closing_keyword(self) -> None:
         src = (ROOT / "scripts" / "dispatch.py").read_text()
