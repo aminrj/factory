@@ -213,8 +213,82 @@ class GateTests(unittest.TestCase):
     def test_rework_is_refused_where_it_does_not_apply(self) -> None:
         self.checkpoint("after_gate2", "2")
         self.assertEqual(self.go("/rework nope"), "ignored")
-        self.assertIn("only works on the review checkpoint", self.bot())
+        self.assertIn("only works at the plan checkpoint and the review checkpoint", self.bot())
         self.assertEqual(self.dispatched, [])
+
+    # -- the plan checkpoint: approve, send back, or edit and send back
+    AGENT = "factory-agent@users.noreply.local"
+
+    def plan_draft_then_owner_edits(self, owner_status: str) -> None:
+        self.commit_file("plan.md", PLAN, email=self.AGENT)  # the planner's draft
+        self.commit_file("plan.md", PLAN.replace("draft", owner_status).replace("## Phase 2: b", "## Phase 2: b\n\npalette: teal"),
+                         email=WEB_EDITOR)  # the owner edits the file in Gitea
+        self.checkpoint("after_gate3", "3", extra=";rework=ok")
+        self.g.comment("owner/app", 1, "The colours are somehow pale, is it possible to propose other colours instead")
+
+    def test_rework_at_the_plan_checkpoint_sends_the_feedback_to_the_planner(self) -> None:
+        self.plan_draft_then_owner_edits("draft")
+        self.agent_files["plan"] = PLAN
+        self.assertEqual(self.go("/rework make the palette less pale"), "ran after_plan_rework")
+        self.assertEqual(self.steps(), ["plan"])
+        note = self.dispatched[0][1] or ""
+        self.assertIn("make the palette less pale", note)  # what they typed
+        self.assertIn("somehow pale", note)  # their comment on the issue
+        self.assertIn("+palette: teal", note)  # their own edit to the file, as a diff
+        self.assertNotIn("/rework", note.split("The owner's comments")[1])  # the command is not repeated as a comment
+        self.assertIn("CHECKPOINT 3", self.bot())
+        self.assertIn("rework=ok", self.bot())  # and the owner can do it again
+
+    def test_a_retry_checkpoint_after_the_comment_does_not_hide_it(self) -> None:
+        """Seen on brevkoll#15: the owner commented, then a failed /go posted a 'retry' checkpoint after the comment."""
+        self.g.comment("owner/app", 1, "Agent step `plan` finished in 2.1 min")
+        self.plan_draft_then_owner_edits("rework")  # the colour comment comes after the planner's run
+        self.checkpoint("after_gate3", "after_gate3-retry")  # a later checkpoint must not reset what counts
+        self.agent_files["plan"] = PLAN
+        self.go("/go")
+        self.assertIn("somehow pale", self.dispatched[0][1] or "")
+
+    def test_comments_from_before_the_planner_last_ran_are_not_repeated(self) -> None:
+        self.g.comment("owner/app", 1, "an old remark that the last draft already answered")
+        self.g.comment("owner/app", 1, "Agent step `plan` finished in 2.1 min")
+        self.plan_draft_then_owner_edits("draft")
+        self.agent_files["plan"] = PLAN
+        self.go("/rework again")
+        self.assertNotIn("old remark", self.dispatched[0][1] or "")
+
+    def test_status_rework_plus_go_does_the_same(self) -> None:
+        self.plan_draft_then_owner_edits("rework")
+        self.agent_files["plan"] = PLAN
+        self.assertEqual(self.go("/go but this time the plan needs rework"), "ran after_gate3")
+        self.assertEqual(self.steps(), ["plan"])
+        self.assertIn("somehow pale", self.dispatched[0][1] or "")
+        self.assertIn("+palette: teal", self.dispatched[0][1] or "")
+        self.assertEqual(self.dispatched.count(("implement", None)), 0)
+
+    def test_a_draft_plan_gets_options_not_an_error(self) -> None:
+        self.plan_draft_then_owner_edits("draft")
+        self.assertEqual(self.go("/go"), "needs human")
+        text = self.bot()
+        self.assertIn("Status: approved", text)
+        self.assertIn("/rework", text)
+        self.assertEqual(self.dispatched, [])
+
+    def test_the_plan_checkpoint_offers_all_three_answers(self) -> None:
+        self.commit_file("threat-model.md", "| R1 | ACCEPTED |\n")
+        self.checkpoint("after_gate2")
+        self.agent_files.update(research="# Research\n", plan=PLAN)
+        self.go()
+        text = self.bot()
+        for needle in ("Approve", "/rework", "Status: rework", "rework=ok"):
+            self.assertIn(needle, text)
+
+    def test_minutes_with_a_unit_suffix_are_read(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "2b")
+        self.agent_files["plan"] = PLAN
+        self.go("/go minutes=5min")
+        recorded = (orchestrate.DATA / "human_minutes.jsonl").read_text()
+        self.assertIn('"minutes": 5', recorded)
 
     # -- after the owner merged
     def test_after_the_merge_the_staged_build_goes_and_main_is_mirrored(self) -> None:

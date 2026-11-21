@@ -93,5 +93,20 @@ class EntryGateTests(unittest.TestCase):
         self.assertIn("not in any commit", self.refused("implement"))
 
 
+class PlanRevisionTests(unittest.TestCase):
+    def test_the_revision_prompt_keeps_the_owners_edits_and_resets_the_status(self) -> None:
+        prompt = dispatch.plan_revision_prompt(15, "app", "agent/issue-15")
+        for needle in ("REVISION", "Owner feedback on the previous plan draft", "keep the owner's own edits",
+                       "Status: draft", "never write `Status: approved`", "other colours"):
+            self.assertIn(needle, prompt)
+
+    def test_a_plan_run_must_end_as_a_draft(self) -> None:
+        self.assertIsNone(dispatch.plan_status_problem("Status: draft\n# Plan"))
+        self.assertIsNone(dispatch.plan_status_problem("**Status: draft**\n"))
+        self.assertIn("rework", dispatch.plan_status_problem("Status: rework\n") or "")
+        self.assertIn("approved", dispatch.plan_status_problem("Status: approved\n") or "")
+        self.assertIn("?", dispatch.plan_status_problem("# Plan with no status\n") or "")
+
+
 if __name__ == "__main__":
     unittest.main()
