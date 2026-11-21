@@ -9,6 +9,7 @@ The Gate 1 seed commit is made under the human's git identity (it is the only su
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -94,6 +95,42 @@ def create_app(g: Gitea, app: str, desc: str, seed: Path | None, work_title: str
     return n, branch
 
 
+def ensure_wip_pr(g: Gitea, repo: str, branch: str, n: int, title: str) -> dict:
+    """The work item gets its PR at Gate 1, so CI runs on the holdout tests and the owner has one place to look.
+    dispatch.py reuses it and the orchestrator removes `WIP:` at the review checkpoint."""
+    pr = next((p for p in g.get(f"/repos/{repo}/pulls?state=open") if p["head"]["ref"] == branch), None)
+    return pr or g.call("POST", f"/repos/{repo}/pulls", {"head": branch, "base": "main", "title": f"WIP: {title}",
+                                                          "body": f"Refs #{n}\n\nGate 1 draft. Nothing to merge yet."})
+
+
+def open_work_item(g: Gitea, app: str, title: str, body: str, seed: Path | None, desc: str = "",
+                   existing_only: bool = False, as_factory: bool = False) -> tuple[int, str]:
+    """The one way to open work: issue, branch with the Gate 1 draft, WIP pull request, Checkpoint 1. Used for a brand new
+    app (new_app.py) and for a change on an existing app (new_change.py), so a fix to the opening lands in both.
+    as_factory: commit the draft as factory-orchestrator (a change the factory drafted for the owner) instead of the
+    owner's own git identity (a seed the owner wrote)."""
+    import orchestrate  # noqa: PLC0415 - orchestrate is heavy and only needed here
+
+    repo = f"{g.user}/{app}"
+    if existing_only and not g.exists(f"/repos/{repo}"):
+        raise SystemExit(f"{repo} does not exist; use new_app.py for a new app.")
+    if as_factory:
+        os.environ.update(orchestrate.ORCH)
+    n, branch = create_app(g, app, desc, seed, title, body)
+    pr = ensure_wip_pr(g, repo, branch, n, title)
+    ctx = orchestrate.Ctx(g, repo, n, None, 0, {})
+    tests = sorted((seed / "tests" / "holdout").glob("*.py")) if seed else []
+    links = "\n".join(f"- [{t.name}]({ctx.url(f'/src/branch/{branch}/tests/holdout/{t.name}')})" for t in tests)
+    who = "as the factory, not as you" if as_factory else "from the seed"
+    orchestrate.checkpoint(
+        ctx, "1", "spec and holdout tests need your review",
+        f"Gate 1 is on `{branch}`, drafted {who}. Pull request (CI runs the holdout tests here): {pr['html_url']}\n\n"
+        f"- [spec.md]({ctx.file_link('spec.md')})\n{links}\n\nRead the spec and the tests and change what you disagree with. "
+        "If the spec has a `Status:` line, change `Status: draft` to `Status: approved` in a commit of your own (the pencil icon "
+        "in Gitea works). Then reply `/go minutes=N`. Approving makes the spec and the tests yours.", "after_gate1")
+    return n, branch
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("app")
@@ -102,7 +139,7 @@ def main() -> None:
     ap.add_argument("--work-title", default="v1")
     ap.add_argument("--work-body", default="")
     args = ap.parse_args()
-    n, branch = create_app(Gitea(), args.app, args.description, args.seed, args.work_title, args.work_body)
+    n, branch = open_work_item(Gitea(), args.app, args.work_title, args.work_body, args.seed, args.description)
     print(f"work issue #{n}, branch {branch}")
 
 
