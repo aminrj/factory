@@ -102,6 +102,45 @@ class LogExcerptTests(unittest.TestCase):
             self.assertEqual(orchestrate.failing_logs(ctx, "abc", ["security"]), "")  # type: ignore[arg-type]
 
 
+class ReworkAndStagingTests(unittest.TestCase):
+    def test_rework_command_is_parsed_with_its_note(self) -> None:
+        m = orchestrate.REWORK.match("/rework the .ics has the wrong year\nand the page is too wide")
+        self.assertIsNotNone(m)
+        self.assertIn("wrong year", m.group(1))  # type: ignore[union-attr]
+        self.assertIsNone(orchestrate.REWORK.match("please /rework this"))
+        self.assertIsNone(orchestrate.GO.match("/rework"))
+
+    def test_decide_returns_rework(self) -> None:
+        class G:
+            user = "bot"
+
+            def paged(self, path: str) -> list[dict]:
+                return [{"id": 1, "user": {"login": "bot"}, "body": "🛑 CHECKPOINT 4: x\n<!--factory:resume=after_gate4;rework=ok-->"},
+                        {"id": 2, "user": {"login": "bot"}, "body": "/rework wrong date"}]
+
+        d = orchestrate.decide(G(), "amine/x", 1)  # type: ignore[arg-type]
+        self.assertEqual(d[2], "rework")  # type: ignore[index]
+
+    def test_staging_block_has_both_links_and_the_checklist(self) -> None:
+        ctx = FakeCtx()
+        ctx.branch = "agent/issue-1"  # type: ignore[attr-defined]
+        ctx.branch_file = lambda name: "- [ ] decode the fixture letter"  # type: ignore[method-assign]
+        out = mock.Mock(returncode=0, stdout='{"url": "http://box.example.com:8800/", "ip": "100.64.0.9", "port": 8800, "sha": "abcdef123456"}', stderr="")
+        with mock.patch.object(orchestrate, "stage_call", return_value=out):
+            text = orchestrate.staging_block(ctx)  # type: ignore[arg-type]
+        self.assertIn("[Open the staged build](http://box.example.com:8800/)", text)
+        self.assertIn("http://100.64.0.9:8800/", text)
+        self.assertIn("decode the fixture letter", text)
+
+    def test_staging_failure_does_not_stop_the_checkpoint(self) -> None:
+        ctx = FakeCtx()
+        out = mock.Mock(returncode=1, stdout="", stderr="STAGING FAILED: no model configured")
+        with mock.patch.object(orchestrate, "stage_call", return_value=out), mock.patch.object(orchestrate, "log"):
+            text = orchestrate.staging_block(ctx)  # type: ignore[arg-type]
+        self.assertIn("Could not stage", text)
+        self.assertIn("no model configured", text)
+
+
 class PrBodyTests(unittest.TestCase):
     def test_pr_body_does_not_use_a_closing_keyword(self) -> None:
         src = (ROOT / "scripts" / "dispatch.py").read_text()

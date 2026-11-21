@@ -102,11 +102,33 @@ flowchart LR
 | 2 | Architecture + threat model | `thoughts/<id>/threat-model.md` | Agent drafts, I decide | Me | 30 min |
 | 3 | Program design | `thoughts/<id>/research.md`, `plan.md` | Agent | Me: types, signatures, slices | 30 min |
 | 4 | Vertical slices | Commits per phase | Agent, one fresh session per phase | Automated checks between phases | 10 min/phase |
-| 5 | Code review | PR + CI + local review comment | Agent opens, local LLM comments | Me | 30 min |
-| 6 | Deploy | GitOps PR bumping image tag | Me | Me (merge = deploy) | 10 min |
+| 5 | Try it and review | Staged build (link in the PR comment), `acceptance.md`, PR + CI | Factory stages and writes the checklist | Me: click, tick, read the diff, merge | 30 min |
+| 6 | Promote | Registry image, scan, `deploy/` manifests, GitOps Application PR | Factory prepares | Me (merge = deploy) | 10 min |
 | 7 | Evaluate | `stage/*` label + retro line | Me | Me: keep, iterate, or kill | 15 min |
 
 I log my real minutes per gate in the PR template. **That number is the most valuable data this whole project produces.** It shows where human time goes in a factory that works.
+
+### 4a. Try it, then promote
+
+Everything is said over Git. The human clicks links in Gitea comments. **No link or hostname is ever written to a tracked file or posted on GitHub:** `scripts/mirror.py` blocks every push to a mirror that adds tailnet names, lab names or private addresses (extra patterns go in the untracked `~/.config/factory/mirror-deny.txt`).
+
+**Staging (gate 5).** When `checks`, `gates`, `security` and `holdout` are green, the orchestrator runs `scripts/stage.py up <app> <issue>`. It builds the PR head, starts it in the fixed sandbox on the devbox (read-only root, no capabilities, no new privileges, memory and pid limits, `/tmp` and `/data` as tmpfs) and posts the review checkpoint on the Gitea issue with:
+
+- the link to the staged build (tailnet only) and the same link by IP,
+- `thoughts/<n>/acceptance.md`, the checklist the `validate` step writes from the spec's acceptance criteria,
+- how to answer: `/go minutes=N` after merging, `/rework <what is wrong>` to send it back (the note goes to one implement run, then checks, validation and a new staged build), `/stop`.
+
+The staged build is removed on merge or `/stop`. `stage.py status` lists what runs. Only a commit whose four checks are green is staged.
+
+**What an app must satisfy** (`docs/deploy.md` in every app repo, checked by `validate`): a `CMD` with `--host` and `--port`, `GET /healthz`, a non-root user, writes only to `/tmp` and `/data`, settings from environment variables, one replica unless it says why not.
+
+**Model: bring your own.** An app needs only an OpenAI-compatible endpoint: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`, optional `LLM_TLS_CA_FILE`, `LLM_TLS_CERT_FILE`, `LLM_TLS_KEY_FILE` (client certificate). On the owner's devbox these come from the untracked `~/.config/factory/staging.env` (plus `apps/<app>.env`); on the cluster from an ExternalSecret. The homelab model route (a mutual-TLS front end on the GPU machine, a shared `factory` client identity) is one profile of that contract, not part of the factory. *Known gap:* anyone else running the factory supplies their own endpoint and must write down its busy and off behaviour; the factory has no model of its own.
+
+**Stopgap today.** While no shared client certificate exists, staging reaches the model on the devbox's loopback and the staged container shares the host network. That goes away with the mutual-TLS route and a bridge network.
+
+**Promotion (gate 6), not automated yet.** After the merge: tag, build, scan (trivy gate), SBOM, push to the Gitea registry, then a PR for the cluster. The manifests live in the app repo (`deploy/base`, `deploy/overlays/homelab`) and go through the app's own CI; the GitOps repo only gets a small ArgoCD Application. One replica, reachable from the tailnet only, a NetworkPolicy that allows egress to the model only, secrets from an ExternalSecret. I review and merge; the factory never touches the cluster.
+
+**Promotion checklist** (copy into the release issue): the staged build passed the acceptance list on a phone; no open `bug` issue marked blocking; the hardening items for the exposure chosen are merged; `docs/deploy.md` has a real Production and Rollback section; the model route for the cluster works from a pod (certificate, network policy).
 
 ---
 

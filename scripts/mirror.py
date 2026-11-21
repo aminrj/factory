@@ -74,6 +74,7 @@ def added_lines(repo: Path, whole_tree: bool) -> list[tuple[str, int, str]]:
 
 
 TEST_PATH = re.compile(r"(^|/)tests?/")
+SELF = re.compile(r"(^|/)(mirror\.py|test_mirror\.py)$")  # the guard describes the patterns it blocks
 
 
 def check(repo: Path, whole_tree: bool = False) -> list[str]:
@@ -81,7 +82,7 @@ def check(repo: Path, whole_tree: bool = False) -> list[str]:
     pats = rules()
     return [f"{p}:{n}  ({name})" for p, n, text in added_lines(repo, whole_tree)
             for name, rx in pats.items()
-            if rx.search(text) and not (name == "private-ip" and TEST_PATH.search(p))]
+            if rx.search(text) and not SELF.search(p) and not (name == "private-ip" and TEST_PATH.search(p))]
 
 
 def push(repo: Path, branch: str = "main") -> None:
