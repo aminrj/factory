@@ -81,6 +81,18 @@ def check_machine() -> None:
         say("ok" if active == "active" else "WARN", f"{t} {active or 'unknown'}", f"systemctl --user enable --now {t}")
 
 
+def check_kit() -> None:
+    """The kit in factory-ops is the source, factory/scripts the runtime copy. They drifted once (a fix lived only in the
+    runtime copy). Any script present in both must be identical."""
+    kit = stage.WORK / "factory-kit" / "hq" / "scripts"
+    run = Path(__file__).resolve().parent
+    if not kit.is_dir():
+        return
+    drift = sorted(f.name for f in kit.glob("*.py") if (run / f.name).exists() and f.read_bytes() != (run / f.name).read_bytes())
+    say("WARN" if drift else "ok", "kit scripts match the runtime copy" if not drift else f"kit differs from runtime: {', '.join(drift)}",
+        "copy the newer file to the other place and commit both (factory-ops and factory)")
+
+
 def check_gitea() -> None:
     try:
         g = stage.Gitea()
@@ -95,6 +107,7 @@ def main(argv: list[str]) -> int:
     check_files(app)
     check_model(app)
     check_machine()
+    check_kit()
     check_gitea()
     fails = sum(1 for lvl, *_ in results if lvl == "FAIL")
     warns = sum(1 for lvl, *_ in results if lvl == "WARN")

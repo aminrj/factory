@@ -61,6 +61,20 @@ class DoctorTests(unittest.TestCase):
         self.assertTrue(any(lvl == "FAIL" and "LLM_BASE_URL" in what for lvl, what, _ in doctor.results))
 
 
+class KitDriftTests(unittest.TestCase):
+    def test_drift_is_a_warning(self) -> None:
+        doctor.results.clear()
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            kit = work / "factory-kit" / "hq" / "scripts"
+            kit.mkdir(parents=True)
+            (kit / "doctor.py").write_text("old")  # differs from the real scripts/doctor.py
+            with mock.patch.object(stage, "WORK", work), mock.patch("builtins.print"):
+                doctor.check_kit()
+        self.assertEqual(doctor.results[0][0], "WARN")
+        self.assertIn("doctor.py", doctor.results[0][1])
+
+
 class SecretFileTests(unittest.TestCase):
     def test_key_is_read_from_its_source_file(self) -> None:
         with tempfile.TemporaryDirectory() as d:
