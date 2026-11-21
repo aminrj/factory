@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
@@ -91,6 +92,49 @@ class EntryGateTests(unittest.TestCase):
         self.commit("plan.md", "Status: draft\n", "bot@x")
         (self.wt / "thoughts" / "1" / "plan.md").write_text("Status: approved\n")
         self.assertIn("not in any commit", self.refused("implement"))
+
+
+class DeclinedStepTests(unittest.TestCase):
+    def test_a_step_that_changed_nothing_exits_with_the_declined_code_and_prints_the_reply(self) -> None:
+        import io
+        from contextlib import redirect_stderr
+
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            dispatch.declined("implement", "Phase 3 needs your approval.")
+        self.assertEqual(caught.exception.code, dispatch.DECLINED_EXIT)
+        self.assertIn("Phase 3 needs your approval.", err.getvalue())
+
+    def test_the_two_scripts_agree_on_the_exit_code(self) -> None:
+        import orchestrate
+
+        self.assertEqual(orchestrate.DECLINED_EXIT, dispatch.DECLINED_EXIT)
+
+    def test_dispatch_turns_that_exit_code_into_a_question(self) -> None:
+        import orchestrate
+
+        ctx = mock.Mock(app="app", n=1)
+        done = mock.Mock(returncode=dispatch.DECLINED_EXIT, stdout="", stderr="the agent said no")
+        with mock.patch.object(orchestrate.subprocess, "run", return_value=done), mock.patch.object(orchestrate, "log"):
+            with self.assertRaises(orchestrate.AgentDeclined) as caught:
+                orchestrate.dispatch(ctx, "implement")
+        self.assertIsInstance(caught.exception, orchestrate.NeedsHuman)
+        self.assertIn("the agent said no", str(caught.exception))
+
+
+class NoCommitCallSiteTests(unittest.TestCase):
+    def test_a_run_without_a_commit_is_a_declined_step_not_a_refusal(self) -> None:
+        """The path that stopped brevkoll#15 sits in main(), which needs a model run; check the source instead."""
+        src = Path(dispatch.__file__).read_text()
+        self.assertIn('declined(step, str(result.get("result")', src)
+        self.assertNotIn('die("the agent produced no commit', src)
+
+
+class PlanPromptTests(unittest.TestCase):
+    def test_the_planner_may_not_write_conditional_phases(self) -> None:
+        self.assertIn("## Deferred", dispatch.NO_CONDITIONAL_PHASES)
+        self.assertIn("only if the human approves", dispatch.NO_CONDITIONAL_PHASES)
+        self.assertIn(dispatch.NO_CONDITIONAL_PHASES, dispatch.plan_revision_prompt(1, "a", "b"))
 
 
 class PlanRevisionTests(unittest.TestCase):

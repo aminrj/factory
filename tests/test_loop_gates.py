@@ -154,10 +154,57 @@ class GateTests(unittest.TestCase):
     def test_answering_the_questions_makes_the_plan(self) -> None:
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
         self.agent_files["plan"] = PLAN
         self.assertEqual(self.go(), "ran after_research_questions")
         self.assertEqual(self.steps(), ["plan"])
         self.assertIn("CHECKPOINT 3", self.bot())
+
+    def test_unanswered_questions_get_one_nudge_then_the_owner_decides(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "2b")
+        self.agent_files["plan"] = PLAN
+        self.assertEqual(self.go("/go"), "needs human")  # no comment from the owner since the questions
+        self.assertIn("have not answered", self.bot())
+        self.assertEqual(self.dispatched, [])
+        self.assertEqual(self.go("/go"), "ran after_research_questions")  # the owner chose to go on without answers
+        self.assertEqual(self.steps(), ["plan"])
+
+    def test_answered_questions_go_straight_through(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "Q1: no, keep it UI only. Q2: yes, in the answer language.")
+        self.agent_files["plan"] = PLAN
+        self.assertEqual(self.go("/go"), "ran after_research_questions")
+
+    # -- an agent that declines is a question, not a failure
+    def test_a_declined_phase_asks_the_owner_with_the_agents_own_words(self) -> None:
+        self.commit_file("plan.md", PLAN.replace("draft", "approved") + "\n## Phase 3: only if the human approves Q1\n",
+                         email=WEB_EDITOR)
+        self.checkpoint("after_gate3", "3")
+        reply = "Phase 3 depends on Q1, which is not answered. I did not change anything."
+
+        def declines(ctx: orchestrate.Ctx, step: str, note: str | None = None) -> str:
+            self.dispatched.append((step, note))
+            if self.steps().count("implement") == 3:
+                raise orchestrate.AgentDeclined(step, f"The agent made no change in `{step}` and said:\n\n{reply}")
+            return ""
+
+        with mock.patch.object(orchestrate, "dispatch", side_effect=declines):
+            self.assertEqual(self.go(), "needs human")
+        text = self.bot()
+        self.assertIn(reply, text)
+        self.assertIn("same answer", text)
+        self.assertNotIn("retry-of", text)  # not counted as a failure to retry
+
+    def test_failures_before_a_success_do_not_count_against_a_later_one(self) -> None:
+        self.checkpoint("after_gate3", "3")
+        for _ in range(2):  # two old failures
+            self.g.comment("owner/app", 1, "🛑 CHECKPOINT x-retry: a step failed\n<!--factory:resume=after_gate3;retry-of=after_gate3-->")
+        self.g.comment("owner/app", 1, "Agent step `implement` finished in 1.5 min")  # progress since then
+        self.assertEqual(orchestrate.consecutive_failures(self.g, "owner/app", 1, "after_gate3"), 0)  # type: ignore[arg-type]
+        self.g.comment("owner/app", 1, "🛑 CHECKPOINT x-retry: a step failed\n<!--factory:resume=after_gate3;retry-of=after_gate3-->")
+        self.assertEqual(orchestrate.consecutive_failures(self.g, "owner/app", 1, "after_gate3"), 1)  # type: ignore[arg-type]
 
     # -- gate 3 and 4: build, red CI, rework, review
     def prepare_build(self) -> None:
@@ -285,6 +332,7 @@ class GateTests(unittest.TestCase):
     def test_minutes_with_a_unit_suffix_are_read(self) -> None:
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
         self.agent_files["plan"] = PLAN
         self.go("/go minutes=5min")
         recorded = (orchestrate.DATA / "human_minutes.jsonl").read_text()
