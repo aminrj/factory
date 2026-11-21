@@ -448,7 +448,7 @@ def staging_block(ctx: Ctx) -> str:
     return (f"### 🧪 Try it on your phone\n\n**[Open the staged build]({info['url']})**"
             f" (if the name does not resolve: [{ip_url}]({ip_url}))\n\n"
             f"Build `{info['sha'][:7]}` of `{ctx.branch}`, running in the devbox sandbox. Only devices on your tailnet can open it. "
-            f"It uses the shared model, which can be busy or off; a 502 or 503 means the model, not the app.\n\n"
+            f"Model check before staging: {info.get('model', 'unknown')}. The model is shared and can be busy or off.\n\n"
             f"{checklist}")
 
 

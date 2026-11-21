@@ -53,6 +53,33 @@ class StageTests(unittest.TestCase):
             self.assertIn(flag, stage.POLICY)
         self.assertNotIn("--privileged", stage.POLICY)
 
+    def test_model_preflight_classifies_answers(self) -> None:
+        import urllib.error
+
+        model = {"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_API_KEY": "k"}
+
+        def raising(code: int):
+            def f(*a: object, **k: object) -> None:
+                raise urllib.error.HTTPError("u", code, "m", {}, None)  # type: ignore[arg-type]
+            return f
+
+        with mock.patch.object(stage.urllib.request, "urlopen", raising(401)), self.assertRaises(stage.StageError):
+            stage.preflight_model(model)
+        with mock.patch.object(stage.urllib.request, "urlopen", raising(503)):
+            self.assertIn("busy", stage.preflight_model(model))
+        with mock.patch.object(stage.urllib.request, "urlopen", side_effect=OSError("down")), self.assertRaises(stage.StageError):
+            stage.preflight_model(model)
+
+    def test_a_pr_build_needs_an_open_pr(self) -> None:
+        class G:
+            def get(self, path: str) -> list:
+                return [{"head": {"ref": "agent/issue-2", "sha": "aaa"}}]
+
+        with mock.patch.object(stage, "sh", return_value=""):
+            self.assertEqual(stage.resolve_target(G(), "o/a", Path("."), 2, None), ("aaa", "agent/issue-2"))  # type: ignore[arg-type]
+            with self.assertRaises(stage.StageError):
+                stage.resolve_target(G(), "o/a", Path("."), 1, None)  # type: ignore[arg-type]
+
     def test_env_file_parser_and_staging_keys(self) -> None:
         import tempfile
 
