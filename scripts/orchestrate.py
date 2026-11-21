@@ -42,7 +42,7 @@ STATE = WORK / "state"
 # The command is the first line. Anything after it, on the same line or below (a note to me), is allowed and ignored,
 # except `minutes=N` on the first line. A command that is not understood gets a reply, never silence.
 GO = re.compile(r"^\s*/go\b([^\r\n]*)", re.IGNORECASE)
-MINUTES = re.compile(r"\bminutes=(\d+)\b", re.IGNORECASE)
+MINUTES = re.compile(r"\bminutes=(\d+)", re.IGNORECASE)  # `minutes=5min` is read as 5
 STOP = re.compile(r"^\s*/stop[ \t]*(?:\r?\n|$)", re.IGNORECASE)
 # At the review checkpoint only: `/rework what is wrong` (same line or the lines below) sends the note to a new implement run.
 REWORK = re.compile(r"^\s*/rework\b[ \t]*(.*)$", re.IGNORECASE | re.DOTALL)
@@ -348,18 +348,74 @@ def after_research_questions(ctx: Ctx) -> None:
     plan_and_checkpoint(ctx)
 
 
-def plan_and_checkpoint(ctx: Ctx) -> None:
-    dispatch(ctx, "plan")
+def plan_and_checkpoint(ctx: Ctx, note: str | None = None) -> None:
+    dispatch(ctx, "plan", note=note)
+    plan_checkpoint(ctx)
+
+
+def plan_checkpoint(ctx: Ctx) -> None:
     n_ph = phases(ctx.branch_file("plan.md"))
-    checkpoint(ctx, "3", "approve the plan",
-               f"Plan with {n_ph} phases: {ctx.file_link('plan.md')}\n\nRead it, edit what you disagree with, then change "
-               "`Status: draft` to `Status: approved` in a commit of your own and push. Then reply `/go`. "
-               "I refuse to build until the approval is in a commit by you.", "after_gate3")
+    checkpoint(ctx, "3", "approve the plan or send it back",
+               f"Plan with {n_ph} phases: {ctx.file_link('plan.md')}\n\nThree ways to answer:\n"
+               "- **Approve:** change `Status: draft` to `Status: approved` in a commit of your own and push, then reply `/go`. "
+               "I refuse to build until the approval is in a commit by you.\n"
+               "- **Send it back:** reply `/rework <what to change>`. The planner gets your note, your comments on this issue and "
+               "the edits you made to `plan.md`, and writes a new draft.\n"
+               "- **Edit it yourself:** change the file, set `Status: rework` and reply `/go`; same as the line above.",
+               "after_gate3", rework=True)
+
+
+PLAN_STATUS = re.compile(r"^\**Status:\**\s*(\w+)", re.IGNORECASE | re.MULTILINE)
+
+
+def plan_status(plan: str) -> str:
+    m = PLAN_STATUS.search(plan)
+    return m.group(1).lower() if m else ""
+
+
+def owner_feedback(ctx: Ctx, typed: str = "") -> str:
+    """What the owner told the planner: the text of the command, the comments they wrote since the last checkpoint, and
+    their edits to plan.md (a diff against the agent's last draft). All of it is data for the planner, not instructions."""
+    parts = []
+    if typed.strip():
+        parts.append(f"The owner's note:\n{typed.strip()[:2000]}")
+    comments = ctx.g.paged(f"/repos/{ctx.repo}/issues/{ctx.n}/comments")
+    # Since the planner last ran. Later "retry" or "fix" checkpoints must not hide what the owner said in between.
+    last_plan_run = max((c["id"] for c in comments if c["body"].startswith("Agent step `plan`")), default=0)
+    said = [c["body"].strip() for c in comments if c["id"] > last_plan_run and c["user"]["login"] == ctx.g.user
+            and not c["body"].startswith((CP_PREFIX, CLAIM_PREFIX, NOTICE_PREFIX, "Agent step")) and not is_command(c["body"])]
+    if said:
+        parts.append("The owner's comments on this issue since the planner last ran:\n" + "\n---\n".join(s[:1500] for s in said))
+    agent_commit = sh("git", "log", "--author=factory-agent", "-1", "--format=%H", f"origin/{ctx.branch}", "--",
+                      f"thoughts/{ctx.n}/plan.md", cwd=ctx.clone)
+    if agent_commit:
+        diff = sh("git", "diff", agent_commit, f"origin/{ctx.branch}", "--", f"thoughts/{ctx.n}/plan.md", cwd=ctx.clone)
+        if diff:
+            parts.append("The owner's edits to thoughts/N/plan.md since the agent's last draft (a diff):\n" + diff[:6000])
+    return "\n\n".join(parts) or "The owner asked for a rework without a note; use their comments and edits in plan.md."
 
 
 def after_gate3(ctx: Ctx) -> None:
+    plan = ctx.branch_file("plan.md")
+    status = plan_status(plan)
+    if status == "rework":
+        return after_plan_rework(ctx)
+    if status == "draft":
+        raise NeedsHuman("`plan.md` still says `Status: draft`, so there is nothing to build yet. To build it, change the line "
+                         "to `Status: approved` in a commit of your own and reply `/go`. To change the plan, reply "
+                         "`/rework <what to change>` (your comments and your edits to the file go to the planner), or set "
+                         "`Status: rework` and reply `/go`.")
     ctx.record_minutes("plan_review")
     build(ctx)
+
+
+def after_plan_rework(ctx: Ctx) -> None:
+    """The owner sent the plan back. One new planner run with their feedback, then the plan checkpoint again."""
+    st = ctx.state()
+    note = owner_feedback(ctx, st.pop("rework_note", ""))
+    ctx.save(st)
+    ctx.record_minutes("plan_review")
+    plan_and_checkpoint(ctx, note=note)
 
 
 def after_timebox(ctx: Ctx) -> None:
@@ -569,9 +625,10 @@ def after_staging_rework(ctx: Ctx) -> None:
     validate_and_checkpoint(ctx)
 
 
+REWORK_HANDLERS = {"after_gate3": "after_plan_rework", "after_gate4": "after_staging_rework"}
 HANDLERS = {"after_gate1": after_gate1, "after_gate2": after_gate2, "after_research_questions": after_research_questions,
             "after_gate3": after_gate3, "after_timebox": after_timebox, "after_gate4": after_gate4, "manual": manual,
-            "after_staging_rework": after_staging_rework}
+            "after_staging_rework": after_staging_rework, "after_plan_rework": after_plan_rework}
 LEGACY = {"1": "after_gate1", "2": "after_gate2", "2b": "after_research_questions", "3": "after_gate3",
           "4": "after_gate4", "T": "after_timebox"}
 
@@ -645,12 +702,13 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
     handler = marker.get("resume")
     if kind == "rework":
         if marker.get("rework") != "ok":
-            ctx.comment(f"{CLAIM_PREFIX} `/rework` only works on the review checkpoint (comment {cmd['id']} ignored).")
+            ctx.comment(f"{CLAIM_PREFIX} `/rework` only works at the plan checkpoint and the review checkpoint "
+                        f"(comment {cmd['id']} ignored).")
             return "ignored"
         st = ctx.state()
         st["rework_note"] = (REWORK.match(cmd["body"]).group(1) or "").strip()  # type: ignore[union-attr]
         ctx.save(st)
-        handler = "after_staging_rework"
+        handler = REWORK_HANDLERS.get(marker.get("resume", ""), "after_staging_rework")
     if handler not in HANDLERS:
         ctx.comment(f"{CLAIM_PREFIX} I do not know what `/go` should run here (no resume marker). A session is needed.")
         notify(f"{app}: unclear checkpoint", f"{app}#{n} has no resume marker", priority=4)
