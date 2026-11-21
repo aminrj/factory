@@ -194,6 +194,16 @@ class Ctx:
 
 
 # ---------------------------------------------------------------- checkpoints and agent steps
+def push_metrics(root: Path = HQ) -> None:
+    """Push the metrics commit. If origin/main moved meanwhile (the owner merged a PR), put the commit on top of it and
+    push again; a rejected push must never leave a diverged runtime behind (it paused the orchestrator once)."""
+    try:
+        sh("git", "push", "-q", "origin", "HEAD", cwd=root)
+    except subprocess.CalledProcessError:
+        if not sync_metrics_commits(root):
+            raise
+
+
 def refresh_board() -> None:
     """Run collect_metrics.py and commit BOARD.md and data/ in the factory clone (Gitea only)."""
     res = subprocess.run([sys.executable, "-I", str(HQ / "scripts" / "collect_metrics.py")], cwd=HQ,
@@ -205,7 +215,7 @@ def refresh_board() -> None:
         sh("git", "add", "BOARD.md", "data", cwd=HQ)
         if sh("git", "diff", "--cached", "--name-only", cwd=HQ):
             sh("git", "commit", "-q", "-m", "Metrics refresh", cwd=HQ)
-            sh("git", "push", "-q", "origin", "HEAD", cwd=HQ)
+            push_metrics(HQ)
     except subprocess.CalledProcessError as e:
         log(f"could not commit factory metrics: {(e.stderr or '')[-200:]}")
 
@@ -782,13 +792,44 @@ def runtime_problem(root: Path = HQ) -> str | None:
     return None
 
 
+def git_out(root: Path, *args: str) -> tuple[int, str]:
+    res = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False, env={**os.environ, **ORCH})
+    return res.returncode, res.stdout.strip()
+
+
+def local_commits_are_metrics_only(root: Path = HQ) -> bool:
+    """True when every commit the runtime has and origin/main lacks is a 'Metrics refresh' that touches only BOARD.md and
+    data/: the orchestrator's own bookkeeping, safe to put on top of whatever was merged meanwhile."""
+    _, subjects = git_out(root, "log", "--format=%s", "origin/main..HEAD")
+    _, files = git_out(root, "log", "--name-only", "--format=", "origin/main..HEAD")
+    names = [x for x in files.splitlines() if x]
+    return bool(subjects) and all(x == "Metrics refresh" for x in subjects.splitlines()) \
+        and all(f == "BOARD.md" or f.startswith("data/") for f in names)
+
+
+def sync_metrics_commits(root: Path = HQ) -> bool:
+    """Rebase the local metrics commits onto origin/main and push them. False when they are not only metrics commits or the
+    rebase does not apply cleanly (then the guard pauses and tells the owner, as before)."""
+    git_out(root, "fetch", "-q", "origin", "main")
+    if not local_commits_are_metrics_only(root):
+        return False
+    code, _ = git_out(root, "rebase", "-q", "origin/main")
+    if code != 0:
+        git_out(root, "rebase", "--abort")
+        return False
+    git_out(root, "push", "-q", "origin", "HEAD")
+    return True
+
+
 def update_runtime(root: Path = HQ) -> None:
     """Fast-forward the runtime checkout to origin/main when it is clean and on main, so a merge takes effect within a
-    minute without anyone touching the folder."""
+    minute without anyone touching the folder. The orchestrator's own metrics commits are rebased on top, not a blocker."""
     if runtime_problem(root):
         return
     subprocess.run(["git", "fetch", "-q", "origin", "main"], cwd=root, check=False, capture_output=True)
-    subprocess.run(["git", "merge", "--ff-only", "-q", "origin/main"], cwd=root, check=False, capture_output=True)
+    res = subprocess.run(["git", "merge", "--ff-only", "-q", "origin/main"], cwd=root, check=False, capture_output=True)
+    if res.returncode != 0:
+        sync_metrics_commits(root)
 
 
 def runtime_behind(root: Path = HQ) -> str | None:
