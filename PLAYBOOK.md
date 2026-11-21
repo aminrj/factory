@@ -160,7 +160,7 @@ HQ: `idea`, `friction`, `stage/*`. App repos: `agent:threat-model`, `agent:resea
 
 ### Setup and protection
 
-- `python3 factory-kit/bootstrap.py repos` creates the repos, labels, issues, the Gate 1 branch and a `WIP:` PR on Gitea.
+- `python3 factory-kit/bootstrap.py repos` creates the repos, labels, issues, the Gate 1 branch and a `WIP:` PR on Gitea. It publishes the clones in `WORK/factory` and `WORK/factory-template` as they are (clone the public mirrors there first); the kit holds no copy of the code, so re-running it can never overwrite a live script.
 - `bootstrap.py protect` reads the real status-check names from the PR and protects `main`: no direct pushes, four required checks (`checks`, `gates`, `security`, `holdout`).
 - `bootstrap.py github` creates the public mirrors, turns off Actions, Issues, Projects and Wiki, adds a `github` remote and pushes `main`. It refuses to run if internal hostnames or addresses appear in the files.
 - A new app later: `scripts/new_app.py <app> "<description>"`.
