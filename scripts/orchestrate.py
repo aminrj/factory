@@ -39,8 +39,10 @@ WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
 HQ = Path(__file__).resolve().parent.parent
 DATA = HQ / "data"
 STATE = WORK / "state"
-# The command is the first line. Extra lines after it (a note to me) are allowed and ignored.
-GO = re.compile(r"^\s*/go(?:[ \t]+minutes=(\d+))?[ \t]*(?:\r?\n|$)", re.IGNORECASE)
+# The command is the first line. Anything after it, on the same line or below (a note to me), is allowed and ignored,
+# except `minutes=N` on the first line. A command that is not understood gets a reply, never silence.
+GO = re.compile(r"^\s*/go\b([^\r\n]*)", re.IGNORECASE)
+MINUTES = re.compile(r"\bminutes=(\d+)\b", re.IGNORECASE)
 STOP = re.compile(r"^\s*/stop[ \t]*(?:\r?\n|$)", re.IGNORECASE)
 # At the review checkpoint only: `/rework what is wrong` (same line or the lines below) sends the note to a new implement run.
 REWORK = re.compile(r"^\s*/rework\b[ \t]*(.*)$", re.IGNORECASE | re.DOTALL)
@@ -600,7 +602,8 @@ def decide(g: Gitea, repo: str, n: int) -> tuple[dict, dict, str, int | None] | 
         if c["id"] <= pivot["id"]:
             continue
         if m := GO.match(c["body"]):
-            return pivot, c, "go", int(m.group(1)) if m.group(1) else None
+            minutes = MINUTES.search(m.group(1))
+            return pivot, c, "go", int(minutes.group(1)) if minutes else None
         if STOP.match(c["body"]):
             return pivot, c, "stop", None
         if REWORK.match(c["body"]):
@@ -625,6 +628,10 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         return "waiting"
     pivot, cmd, kind, minutes = d
     marker = parse_marker(pivot["body"])
+    try:
+        record_wait(app, n, pivot, cmd, kind)
+    except Exception as e:  # noqa: BLE001 - metrics must never block a gate
+        log(f"could not record the wait: {type(e).__name__}")
     ctx = Ctx(g, repo, n, minutes, cmd["id"], marker)
     if kind == "stop":
         ctx.comment(f"{CLAIM_PREFIX} Stopped by /stop (comment {cmd['id']}). Nothing more will run for this issue.")
@@ -764,6 +771,89 @@ def announce_merges(g: Gitea) -> None:
     MERGES.write_text(json.dumps({"since": seen["since"], "sent": sorted(sent)[-200:]}))
 
 
+# ---------------------------------------------------------------- no silent ignores
+REPLIED = STATE / "replied.json"
+REMINDERS = STATE / "reminders.json"
+REMIND_AFTER_H = float(os.environ.get("FACTORY_REMIND_AFTER_H", "4"))
+REMIND_EVERY_H = float(os.environ.get("FACTORY_REMIND_EVERY_H", "6"))
+NOTICE_PREFIX = "ℹ️"
+
+
+def parse_ts(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def is_command(body: str) -> bool:
+    return bool(GO.match(body) or STOP.match(body) or REWORK.match(body))
+
+
+def owner_comments(g: Gitea, repo: str, n: int) -> list[dict]:
+    """The bot and the owner share one Gitea login, so the bot's own comments are told apart by their prefix."""
+    return [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user
+            and not c["body"].startswith((CP_PREFIX, CLAIM_PREFIX, NOTICE_PREFIX, "Agent step"))]
+
+
+def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
+    """An owner comment that starts with `/` but is not a command gets one reply that says what is accepted."""
+    seen = set(json.loads(REPLIED.read_text())) if REPLIED.exists() else set()
+    comments = g.paged(f"/repos/{repo}/issues/{n}/comments")
+    pivot = next((c for c in reversed(comments) if c["user"]["login"] == g.user
+                  and c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
+    if pivot is None:
+        return
+    for c in owner_comments(g, repo, n):
+        key = f"{repo}#{c['id']}"
+        if c["id"] <= pivot["id"] or key in seen or not c["body"].lstrip().startswith("/") or is_command(c["body"]):
+            continue
+        word = c["body"].lstrip().split()[0][:30]
+        g.comment(repo, n, f"{NOTICE_PREFIX} I did not understand `{word}`, so I did nothing. Accepted: `/go`, "
+                           "`/go minutes=N` (a note may follow on the same line or below), `/stop`, and `/rework <what is wrong>` "
+                           "at the review checkpoint.")
+        seen.add(key)
+    STATE.mkdir(exist_ok=True)
+    REPLIED.write_text(json.dumps(sorted(seen)[-300:]))
+
+
+def waiting_list(g: Gitea) -> list[dict]:
+    """Work items that wait for the owner: the last comment of the bot is a checkpoint nobody has answered yet."""
+    out = []
+    for repo, n in active_issues(g):
+        mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+        pivot = next((c for c in reversed(mine) if c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
+        if pivot is None or not pivot["body"].startswith(CP_PREFIX):
+            continue
+        if any(c["id"] > pivot["id"] and is_command(c["body"]) for c in mine):
+            continue  # answered; the next tick handles it
+        since = parse_ts(pivot["created_at"])
+        out.append({"repo": repo, "issue": n, "what": pivot["body"].splitlines()[0].removeprefix(CP_PREFIX).strip(),
+                    "since": since.isoformat(timespec="minutes"),
+                    "age_h": round((datetime.now(UTC) - since).total_seconds() / 3600, 1)})
+    return out
+
+
+def remind_waiting(g: Gitea) -> None:
+    """One push per waiting item after REMIND_AFTER_H hours, then again every REMIND_EVERY_H hours."""
+    sent = json.loads(REMINDERS.read_text()) if REMINDERS.exists() else {}
+    now_s = datetime.now(UTC).timestamp()
+    for w in waiting_list(g):
+        key = f"{w['repo']}#{w['issue']}:{w['what'][:40]}"
+        if w["age_h"] >= REMIND_AFTER_H and now_s - sent.get(key, 0) >= REMIND_EVERY_H * 3600:
+            notify(f"Waiting for you: {w['repo'].split('/')[1]}#{w['issue']}", f"{w['what']} (since {w['since'][11:16]}, {w['age_h']} h)",
+                   click=f"{g.repo_url(w['repo']).removesuffix('.git')}/issues/{w['issue']}", priority=3)
+            sent[key] = now_s
+    STATE.mkdir(exist_ok=True)
+    REMINDERS.write_text(json.dumps(sent))
+
+
+def record_wait(app: str, n: int, pivot: dict, cmd: dict, kind: str) -> None:
+    """How long the owner took to answer a checkpoint: the real human-friction number per gate."""
+    DATA.mkdir(exist_ok=True)
+    wait = (parse_ts(cmd["created_at"]) - parse_ts(pivot["created_at"])).total_seconds() / 60
+    with (DATA / "gate_waits.jsonl").open("a") as fh:
+        fh.write(json.dumps({"ts": now(), "repo": app, "issue": n, "checkpoint": parse_marker(pivot["body"]).get("resume", ""),
+                             "answer": kind, "wait_min": round(wait, 1), "comment_id": cmd["id"]}) + "\n")
+
+
 def active_issues(g: Gitea) -> list[tuple[str, int]]:
     out = []
     for r in sorted(x["full_name"] for x in g.paged("/repos/search?q=factory-app&topic=true")):
@@ -797,12 +887,26 @@ def main() -> None:
             announce_merges(g)
         except Exception as e:  # noqa: BLE001 - a notification problem must never stop the run
             log(f"announce_merges failed: {type(e).__name__}: {str(e)[:120]}")
+    if a.cmd == "tick" and not a.dry_run:
+        for repo, n in active_issues(g):
+            try:
+                answer_unknown_commands(g, repo, n)
+            except Exception as e:  # noqa: BLE001
+                log(f"{repo}#{n}: could not answer an unknown command: {type(e).__name__}")
     for repo, n in active_issues(g):
         if a.cmd == "status":
             d = decide(g, repo, n)
             print(f"{repo}#{n}: {'go/stop waiting to be handled' if d else 'waiting or busy'}")
         else:
             print(f"{repo}#{n}: {process(g, repo, n, dry=a.dry_run)}")
+    if a.cmd == "status":
+        for w in waiting_list(g):
+            print(f"WAITING FOR YOU: {w['repo']}#{w['issue']} at {w['what']} since {w['since']} ({w['age_h']} h)")
+    if a.cmd == "tick" and not a.dry_run:
+        try:
+            remind_waiting(g)
+        except Exception as e:  # noqa: BLE001
+            log(f"remind_waiting failed: {type(e).__name__}: {str(e)[:100]}")
 
 
 if __name__ == "__main__":

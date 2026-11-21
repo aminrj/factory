@@ -95,6 +95,15 @@ def write_board(g: Gitea) -> None:
             if stage in rows:
                 rows[stage].append(f"| {issue['title']} | {name}#{issue['number']} |")
     lines = ["# Board", "", f"_Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')} by `scripts/collect_metrics.py`._", ""]
+    try:
+        import orchestrate  # the same list the orchestrator uses for its reminders
+
+        waiting = orchestrate.waiting_list(g)
+    except Exception:  # noqa: BLE001 - the board must still be written
+        waiting = []
+    lines += ["## Waiting for you", "", "| Where | Checkpoint | Since | Hours |", "|---|---|---|---|",
+              *([f"| {w['repo'].split('/')[-1]}#{w['issue']} | {w['what'][:60]} | {w['since']} | {w['age_h']} |" for w in waiting]
+                or ["| (nothing) | | | |"]), ""]
     for stage in STAGES:
         lines += [f"## {stage}", "", "| Item | Issue |", "|---|---|", *(rows[stage] or ["| (none) | |"]), ""]
     (ROOT / "BOARD.md").write_text("\n".join(lines))
@@ -202,6 +211,17 @@ def write(records: list[dict], escaped: dict[str, int], snap: dict) -> None:
     lines += ["", "## Weekly history", "", "| Week | Agent PRs | Rework rate | Human minutes |", "|---|---|---|---|"]
     for w in weeks:
         lines.append(f"| {w['week']} | {w['agent_prs']} | {fmt(w['rework_rate'])} | {w['human_minutes_total']} |")
+    waits_path = DATA / "gate_waits.jsonl"
+    waits = [json.loads(x) for x in waits_path.read_text().splitlines() if x.strip()] if waits_path.exists() else []
+    if waits:
+        by_gate: dict[str, list[float]] = {}
+        for w in waits:
+            by_gate.setdefault(w.get("checkpoint") or "?", []).append(w["wait_min"])
+        lines += ["", "## How long a checkpoint waits for me", "", "| Checkpoint | Answers | Median wait (min) | Longest (min) |",
+                  "|---|---|---|---|"]
+        for gate, vals in sorted(by_gate.items()):
+            vals.sort()
+            lines.append(f"| {gate} | {len(vals)} | {vals[len(vals) // 2]} | {vals[-1]} |")
     (DATA / "SUMMARY.md").write_text("\n".join(lines) + "\n")
 
 
