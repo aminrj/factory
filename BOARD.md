@@ -1,6 +1,6 @@
 # Board
 
-_Generated 2026-11-21 07:03 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-21 07:08 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
@@ -18,13 +18,13 @@ _Generated 2026-11-21 07:03 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
+| (none) | |
 
 ## building
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
 
 ## shipped
 
