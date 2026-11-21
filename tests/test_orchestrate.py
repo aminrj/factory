@@ -171,6 +171,15 @@ class SpecApprovalTests(unittest.TestCase):
     def test_approval_by_the_human_passes(self) -> None:
         self.assertIsNone(self.check([("bot@x", "Status: draft\n", "d"), (self.HUMAN, "Status: approved\n", "a")]))
 
+    def test_a_web_editor_commit_counts_as_the_owner(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            repo = self.repo(d, [("bot@x", "Status: draft\n", "d"), ("1+me@noreply.gitea.example.com", "Status: approved\n", "a")])
+            spec = (repo / "thoughts" / "1" / "spec.md").read_text()
+            self.assertIsNone(orchestrate.spec_approval_problem(repo, "agent/issue-1", 1, spec, self.HUMAN, "me"))
+            self.assertIn("someone other", orchestrate.spec_approval_problem(repo, "agent/issue-1", 1, spec, self.HUMAN, "you") or "")
+
     def test_approval_by_someone_else_is_refused(self) -> None:
         self.assertIn("someone other", self.check([("bot@x", "Status: approved\n", "d")]))  # type: ignore[arg-type]
 

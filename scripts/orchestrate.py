@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mirror  # noqa: E402
-from gitea import Gitea  # noqa: E402
+from gitea import Gitea, is_owner_email  # noqa: E402
 
 WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
 HQ = Path(__file__).resolve().parent.parent
@@ -283,7 +283,7 @@ def open_questions(research: str) -> list[str]:
 STATUS_LINE = re.compile(r"^\**Status:\**\s*(draft|approved)\b", re.IGNORECASE | re.MULTILINE)
 
 
-def spec_approval_problem(clone: Path, branch: str, n: int, spec: str, human_email: str) -> str | None:
+def spec_approval_problem(clone: Path, branch: str, n: int, spec: str, human_email: str, login: str = "") -> str | None:
     """A spec with a `Status:` line needs `Status: approved`, introduced by a commit of the human (like the plan gate).
     Specs without the line (older apps) keep the old behaviour. Returns the problem to show, or None."""
     m = STATUS_LINE.search(spec)
@@ -297,7 +297,7 @@ def spec_approval_problem(clone: Path, branch: str, n: int, spec: str, human_ema
     authors = out.splitlines()
     if not authors:
         return "`Status: approved` is not in any commit yet."
-    if authors[0] != human_email:
+    if not is_owner_email(authors[0], login, human_email):
         return ("`Status: approved` was committed by someone other than you. Approving is yours: make the change in a "
                 "commit of your own.")
     return None
@@ -307,7 +307,8 @@ def after_gate1(ctx: Ctx) -> None:
     spec = ctx.branch_file("spec.md")
     if "<" in spec:
         raise NeedsHuman("`spec.md` still contains `<` placeholders. Fix them, push, then reply `/go` again.")
-    problem = spec_approval_problem(ctx.clone, ctx.branch, ctx.n, spec, sh("git", "config", "user.email", cwd=ctx.clone))
+    problem = spec_approval_problem(ctx.clone, ctx.branch, ctx.n, spec, sh("git", "config", "user.email", cwd=ctx.clone),
+                                    ctx.g.user)
     if problem:
         raise NeedsHuman(problem)
     ctx.record_minutes("spec")
