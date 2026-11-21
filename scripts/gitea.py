@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -32,6 +33,12 @@ def _server_url() -> str:
         if url.startswith("https://"):
             return url.rstrip("/")
     raise SystemExit("Set GITEA_URL (no Gitea URL found in the git credential config).")
+
+
+def is_owner_email(email: str, login: str, configured_email: str) -> bool:
+    """Is this commit author the owner? Commits made in Gitea's web editor carry `<id>+<login>@noreply.<host>`, not the
+    address in the owner's git config; both count. The factory identities (factory-agent, factory-orchestrator) never do."""
+    return email == configured_email or re.fullmatch(rf"\d+\+{re.escape(login)}@noreply\..+", email, re.IGNORECASE) is not None
 
 
 class GiteaError(RuntimeError):

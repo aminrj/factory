@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gitea import Gitea  # noqa: E402
+from gitea import Gitea, is_owner_email  # noqa: E402
 
 STEPS = ["threat-model", "research", "plan", "implement", "validate"]
 AGENT = "factory-agent"
@@ -86,7 +86,7 @@ def check_holdout_formatted(wt: Path) -> None:
             "(Gate 1), otherwise the agent's formatter will touch your files and the guard will refuse the step.")
 
 
-def check_entry(step: str, wt: Path, n: int, human_email: str) -> None:
+def check_entry(step: str, wt: Path, n: int, human_email: str, login: str = "") -> None:
     t = wt / "thoughts" / str(n)
     if not (t / "spec.md").exists():
         die(f"thoughts/{n}/spec.md is missing (Gate 1).")
@@ -108,7 +108,7 @@ def check_entry(step: str, wt: Path, n: int, human_email: str) -> None:
         if not log:
             die("'Status: approved' is not in any commit yet (uncommitted edit).")
         name, email = log.splitlines()[0].split("\t")
-        if name == AGENT or email != human_email:
+        if name == AGENT or not is_owner_email(email, login, human_email):
             die(f"'Status: approved' was set by {name} <{email}>, not by the human.")
 
 
@@ -166,7 +166,7 @@ def main() -> None:
     _, human_email = human_identity(main_clone)
 
     ensure_worktree(main_clone, branch, wt)
-    check_entry(step, wt, n, human_email)
+    check_entry(step, wt, n, human_email, g.user)
     if args.dry_run:
         print(f"dry run ok: {step} may run on {branch} in {wt}")
         return
