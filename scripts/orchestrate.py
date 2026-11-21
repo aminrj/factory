@@ -699,17 +699,31 @@ def update_runtime(root: Path = HQ) -> None:
     subprocess.run(["git", "merge", "--ff-only", "-q", "origin/main"], cwd=root, check=False, capture_output=True)
 
 
+def runtime_behind(root: Path = HQ) -> str | None:
+    """After a fast-forward attempt the runtime must not still be behind origin/main (that means local commits)."""
+    res = subprocess.run(["git", "rev-list", "--count", "HEAD..origin/main"], cwd=root, capture_output=True, text=True,
+                         check=False)
+    if res.returncode == 0 and res.stdout.strip() not in ("", "0"):
+        return "the runtime checkout cannot fast-forward to origin/main (it has local commits)"
+    return None
+
+
+def head_of(root: Path = HQ) -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=False).stdout.strip()
+
+
 def guard_runtime() -> bool:
     """Called at the start of every tick. False means: do nothing this minute and tell the owner (once per problem)."""
     problem = runtime_problem()
     alert = STATE / "runtime-alert.txt"
+    before = head_of()
+    if problem is None:
+        update_runtime()
+        problem = runtime_behind(HQ)
     if problem is None:
         alert.unlink(missing_ok=True)
-        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=HQ, capture_output=True, text=True, check=False).stdout
-        update_runtime()
-        after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=HQ, capture_output=True, text=True, check=False).stdout
-        if before != after:
-            log(f"runtime updated to {after.strip()[:7]}")
+        if before != head_of():
+            log(f"runtime updated to {head_of()[:7]}")
             os.execv(sys.executable, [sys.executable, "-I", *sys.argv])  # run this tick with the new code
         return True
     log(f"runtime guard: {problem}")
