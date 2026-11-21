@@ -13,12 +13,17 @@ import orchestrate  # noqa: E402
 
 
 class FakeGitea:
+    user = "owner"
+
     def set_stage(self, *args: object) -> None:
         pass
 
+    def paged(self, path: str) -> list[dict]:
+        return []  # no comments: nobody said /stop
+
 
 class FakeCtx:
-    repo, n, app = "amine/x", 1, "x"
+    repo, n, app, go_id = "amine/x", 1, "x", 0
 
     def __init__(self) -> None:
         self.g = FakeGitea()

@@ -412,10 +412,12 @@ def after_gate3(ctx: Ctx) -> None:
 def after_plan_rework(ctx: Ctx) -> None:
     """The owner sent the plan back. One new planner run with their feedback, then the plan checkpoint again."""
     st = ctx.state()
-    note = owner_feedback(ctx, st.pop("rework_note", ""))
-    ctx.save(st)
+    note = owner_feedback(ctx, st.get("rework_note", ""))
     ctx.record_minutes("plan_review")
     plan_and_checkpoint(ctx, note=note)
+    st = ctx.state()  # forget the typed note only now: after a crash the retry still has it
+    st.pop("rework_note", None)
+    ctx.save(st)
 
 
 def after_timebox(ctx: Ctx) -> None:
@@ -434,6 +436,7 @@ def build(ctx: Ctx) -> None:
         ctx.save(st)
     n_ph = phases(ctx.branch_file("plan.md"))
     while st.get("phases_done", 0) < n_ph and not st.get("shipping_early"):
+        check_stop(ctx)
         hours = (time.time() - st["build_start"]) / 3600
         if hours >= TIMEBOX_H:
             checkpoint(ctx, "T", f"{TIMEBOX_H:g} h timebox reached: ship or kill?",
@@ -545,6 +548,7 @@ def stage_down(app: str) -> None:
 
 
 def validate_and_checkpoint(ctx: Ctx) -> None:
+    check_stop(ctx)
     st = ctx.state()
     everything = CONTEXTS
     for attempt in range(MAX_RETRIES + 1):
@@ -668,6 +672,32 @@ def decide(g: Gitea, repo: str, n: int) -> tuple[dict, dict, str, int | None] | 
     return None
 
 
+class StopRequested(Exception):
+    """The owner said /stop while a handler was running (heard between phases)."""
+
+    def __init__(self, comment_id: int):
+        super().__init__(f"/stop (comment {comment_id})")
+        self.comment_id = comment_id
+
+
+def stop_item(ctx: Ctx, marker: dict[str, str], comment_id: int, where: str = "") -> None:
+    ctx.comment(f"{CLAIM_PREFIX} Stopped by /stop (comment {comment_id}){where}. Nothing more will run for this issue.")
+    if marker.get("stop") == "kill":
+        ctx.g.set_stage(ctx.repo, ctx.n, "killed")
+    stage_down(ctx.app)
+    log(f"{ctx.app}#{ctx.n}: /stop received, stopped cleanly")
+    commit_ops(f"Stopped: {ctx.app}#{ctx.n}")
+    notify(f"{ctx.app}: stopped", f"{ctx.app}#{ctx.n} stopped by /stop")
+
+
+def check_stop(ctx: Ctx) -> None:
+    """Called between phases of a long handler: a /stop written after the command that started this run ends it cleanly.
+    A build runs inside one tick, so without this the owner could not stop it for hours."""
+    for c in owner_comments(ctx.g, ctx.repo, ctx.n):
+        if c["id"] > ctx.go_id and STOP.match(c["body"]):
+            raise StopRequested(c["id"])
+
+
 def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
     app = repo.split("/")[1]
     if decide(g, repo, n) is None:
@@ -691,13 +721,7 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         log(f"could not record the wait: {type(e).__name__}")
     ctx = Ctx(g, repo, n, minutes, cmd["id"], marker)
     if kind == "stop":
-        ctx.comment(f"{CLAIM_PREFIX} Stopped by /stop (comment {cmd['id']}). Nothing more will run for this issue.")
-        if marker.get("stop") == "kill":
-            g.set_stage(repo, n, "killed")
-        stage_down(app)
-        log(f"{app}#{n}: /stop received, stopped cleanly")
-        commit_ops(f"Stopped: {app}#{n}")
-        notify(f"{app}: stopped", f"{app}#{n} stopped by /stop")
+        stop_item(ctx, marker, cmd["id"])
         return "stopped"
     handler = marker.get("resume")
     if kind == "rework":
@@ -719,6 +743,9 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
     try:
         HANDLERS[handler](ctx)
         return f"ran {handler}"
+    except StopRequested as e:
+        stop_item(ctx, marker, e.comment_id, where=" between two steps")
+        return "stopped"
     except NeedsHuman as e:
         checkpoint(ctx, f"{marker.get('gate', handler)}-fix", "one thing is left for you", str(e), handler)
         return "needs human"
@@ -912,6 +939,45 @@ def record_wait(app: str, n: int, pivot: dict, cmd: dict, kind: str) -> None:
                              "answer": kind, "wait_min": round(wait, 1), "comment_id": cmd["id"]}) + "\n")
 
 
+# ---------------------------------------------------------------- crash recovery
+RUNNING_CLAIM = re.compile(r"Running `(\w+)`")
+FAILED_CLAIM = re.compile(r"Unexpected error in `(\w+)`")
+
+
+def stuck_handler(g: Gitea, repo: str, n: int) -> str | None:
+    """The handler an item was running when it stopped, if its last bot comment is a claim (`Picked up ... Running X` or
+    `Unexpected error in X`) instead of a checkpoint. Such an item answers to no /go: decide() looks for a checkpoint."""
+    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+    pivot = next((c for c in reversed(mine) if c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
+    if pivot is None or not pivot["body"].startswith(CLAIM_PREFIX):
+        return None
+    m = RUNNING_CLAIM.search(pivot["body"]) or FAILED_CLAIM.search(pivot["body"])
+    return m.group(1) if m and m.group(1) in HANDLERS else None
+
+
+def recover_interrupted(g: Gitea, repo: str, n: int) -> bool:
+    """If the orchestrator died while running a step (kill, reboot, out of memory), say so with a checkpoint the owner can
+    answer, instead of leaving the item silent. The lock is held for exactly as long as a process is running the item."""
+    app = repo.split("/")[1]
+    STATE.mkdir(exist_ok=True)
+    lock = (STATE / f"{app}-{n}.lock").open("w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False  # a process is running it right now
+    handler = stuck_handler(g, repo, n)
+    if handler is None:
+        return False
+    ctx = Ctx(g, repo, n, None, 0, {})
+    checkpoint(ctx, f"{handler}-interrupted", "the orchestrator stopped while running a step",
+               f"`{handler}` did not finish: the process ended before it reported anything (a restart, a kill, or an "
+               "unexpected error). Nothing was lost; the step is safe to run again. Reply `/go` to run it again, or "
+               "`/stop`.", handler)
+    notify(f"{app}: interrupted", f"{app}#{n}: `{handler}` did not finish. Reply /go to run it again.", priority=4)
+    log(f"{app}#{n}: recovered an interrupted `{handler}`")
+    return True
+
+
 def active_issues(g: Gitea) -> list[tuple[str, int]]:
     out = []
     for r in sorted(x["full_name"] for x in g.paged("/repos/search?q=factory-app&topic=true")):
@@ -951,6 +1017,12 @@ def main() -> None:
                 answer_unknown_commands(g, repo, n)
             except Exception as e:  # noqa: BLE001
                 log(f"{repo}#{n}: could not answer an unknown command: {type(e).__name__}")
+    if a.cmd == "tick" and not a.dry_run:
+        for repo, n in active_issues(g):
+            try:
+                recover_interrupted(g, repo, n)
+            except Exception as e:  # noqa: BLE001
+                log(f"{repo}#{n}: recovery failed: {type(e).__name__}: {str(e)[:100]}")
     for repo, n in active_issues(g):
         if a.cmd == "status":
             d = decide(g, repo, n)
@@ -958,6 +1030,10 @@ def main() -> None:
         else:
             print(f"{repo}#{n}: {process(g, repo, n, dry=a.dry_run)}")
     if a.cmd == "status":
+        for repo, n in active_issues(g):
+            handler = stuck_handler(g, repo, n)
+            if handler:
+                print(f"STUCK: {repo}#{n} was running `{handler}` and the process ended; the next tick posts a checkpoint")
         for w in waiting_list(g):
             print(f"WAITING FOR YOU: {w['repo']}#{w['issue']} at {w['what']} since {w['since']} ({w['age_h']} h)")
     if a.cmd == "tick" and not a.dry_run:
