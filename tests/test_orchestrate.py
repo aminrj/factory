@@ -70,5 +70,29 @@ class PrBodyTests(unittest.TestCase):
         self.assertNotIn("Closes #", src)
 
 
+class HoldoutFormatTests(unittest.TestCase):
+    def test_unformatted_holdout_stops_the_step(self) -> None:
+        import dispatch  # noqa: PLC0415
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            wt = Path(d)
+            (wt / "tests" / "holdout").mkdir(parents=True)
+            fake = mock.Mock(returncode=1, stdout="", stderr="")
+            with mock.patch.object(dispatch.subprocess, "run", return_value=fake):
+                with self.assertRaises(SystemExit):
+                    dispatch.check_holdout_formatted(wt)
+            fake.returncode = 0
+            with mock.patch.object(dispatch.subprocess, "run", return_value=fake):
+                dispatch.check_holdout_formatted(wt)  # clean: no exit
+
+    def test_no_holdout_dir_is_fine(self) -> None:
+        import dispatch  # noqa: PLC0415
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            dispatch.check_holdout_formatted(Path(d))
+
+
 if __name__ == "__main__":
     unittest.main()

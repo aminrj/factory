@@ -440,10 +440,12 @@ enforce it. Mark every decision as "PROPOSED". Stop.
 
 ```markdown
 ## Issue
-Closes #
+Refs #   (not "Closes": merging must not close the work issue before the release)
 
 ## Gates
 - [ ] Gate 1: spec and holdout tests merged or committed by me before implementation
+  - [ ] `uv run ruff format tests/holdout && uv run ruff check tests/holdout` is clean (an agent's `ruff format .` must not need to touch the holdout file)
+  - [ ] `AGENTS.md` "What this repo is" is filled in and `README.md` is no longer the template's (stub: `.factory/templates/readme-app.md`)
 - [ ] Gate 2: threat model decisions made (no PROPOSED left)
 - [ ] Gate 3: plan approved
 - [ ] Gate 4: every phase committed separately, checks green between phases
