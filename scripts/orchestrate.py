@@ -674,6 +674,51 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         return "error"
 
 
+def runtime_problem(root: Path = HQ) -> str | None:
+    """The timer runs this checkout. If it is on another branch or has local code changes it silently runs the wrong
+    code (the owner's /go on brevkoll#15 was ignored for that reason). Data files (data/, BOARD.md) change all the time
+    and do not count. Returns what is wrong, or None."""
+    def git(*a: str) -> str:
+        return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, check=False).stdout.strip()
+
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch != "main":
+        return f"the runtime checkout is on `{branch}`, not `main`. Dev work belongs in a worktree under worktrees/"
+    if git("status", "--porcelain", "--", "scripts", "tests", "PLAYBOOK.md"):
+        return "the runtime checkout has uncommitted changes in scripts/, tests/ or PLAYBOOK.md"
+    return None
+
+
+def update_runtime(root: Path = HQ) -> None:
+    """Fast-forward the runtime checkout to origin/main when it is clean and on main, so a merge takes effect within a
+    minute without anyone touching the folder."""
+    if runtime_problem(root):
+        return
+    subprocess.run(["git", "fetch", "-q", "origin", "main"], cwd=root, check=False, capture_output=True)
+    subprocess.run(["git", "merge", "--ff-only", "-q", "origin/main"], cwd=root, check=False, capture_output=True)
+
+
+def guard_runtime() -> bool:
+    """Called at the start of every tick. False means: do nothing this minute and tell the owner (once per problem)."""
+    problem = runtime_problem()
+    alert = STATE / "runtime-alert.txt"
+    if problem is None:
+        alert.unlink(missing_ok=True)
+        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=HQ, capture_output=True, text=True, check=False).stdout
+        update_runtime()
+        after = subprocess.run(["git", "rev-parse", "HEAD"], cwd=HQ, capture_output=True, text=True, check=False).stdout
+        if before != after:
+            log(f"runtime updated to {after.strip()[:7]}")
+            os.execv(sys.executable, [sys.executable, "-I", *sys.argv])  # run this tick with the new code
+        return True
+    log(f"runtime guard: {problem}")
+    STATE.mkdir(exist_ok=True)
+    if not alert.exists() or alert.read_text() != problem:
+        alert.write_text(problem)
+        notify("factory: orchestrator paused", problem + ". No /go or /stop is being read until this is fixed.", priority=5)
+    return False
+
+
 MERGES = STATE / "merges.json"
 
 
@@ -729,6 +774,8 @@ def main() -> None:
     g = Gitea()
     if a.cmd == "run":
         print(process(g, f"{g.user}/{a.repo}", a.issue))
+        return
+    if a.cmd == "tick" and not a.dry_run and not guard_runtime():
         return
     if a.cmd == "tick" and not a.dry_run:
         try:

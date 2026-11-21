@@ -216,6 +216,46 @@ class ActiveAndMergeTests(unittest.TestCase):
         self.assertIn("Because the gate was blind.", sent[0][1])
 
 
+class RuntimeGuardTests(unittest.TestCase):
+    def repo(self, d: str) -> Path:
+        import subprocess
+
+        r = Path(d)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(r)], check=True)
+        (r / "scripts").mkdir()
+        (r / "data").mkdir()
+        (r / "scripts" / "a.py").write_text("x")
+        (r / "data" / "d.jsonl").write_text("1")
+        subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+        subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "-m", "i"], cwd=r, check=True)
+        return r
+
+    def test_main_and_clean_is_fine_even_with_data_changes(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            r = self.repo(d)
+            (r / "data" / "d.jsonl").write_text("2")  # metrics jobs rewrite this all the time
+            self.assertIsNone(orchestrate.runtime_problem(r))
+
+    def test_another_branch_is_a_problem(self) -> None:
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            r = self.repo(d)
+            subprocess.run(["git", "switch", "-q", "-c", "feat/x"], cwd=r, check=True)
+            self.assertIn("feat/x", orchestrate.runtime_problem(r) or "")
+
+    def test_local_code_changes_are_a_problem(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            r = self.repo(d)
+            (r / "scripts" / "a.py").write_text("changed")
+            self.assertIn("uncommitted", orchestrate.runtime_problem(r) or "")
+
+
 class PrBodyTests(unittest.TestCase):
     def test_pr_body_does_not_use_a_closing_keyword(self) -> None:
         src = (ROOT / "scripts" / "dispatch.py").read_text()
