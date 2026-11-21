@@ -122,6 +122,27 @@ class DeclinedStepTests(unittest.TestCase):
         self.assertIn("the agent said no", str(caught.exception))
 
 
+class ChangedFileLinksTests(unittest.TestCase):
+    URL = "https://gitea.example/o/app.git"
+
+    def test_links_use_the_branch_and_put_the_thoughts_of_the_issue_first(self) -> None:
+        out = dispatch.changed_file_links(self.URL, "agent/issue-3", ["src/app/ui.py", "thoughts/3/plan.md", "README.md"], 3)
+        rows = out.splitlines()
+        self.assertEqual(rows[0], "### Files this step changed")
+        self.assertEqual(rows[2], "- [thoughts/3/plan.md](https://gitea.example/o/app/src/branch/agent/issue-3/thoughts/3/plan.md)")
+        self.assertIn("(https://gitea.example/o/app/src/branch/agent/issue-3/src/app/ui.py)", out)
+        self.assertNotIn(".git/", out)
+
+    def test_the_dispatchers_own_snapshot_is_not_listed_and_long_lists_are_capped(self) -> None:
+        files = ["thoughts/3/issue.md"] + [f"src/f{i}.py" for i in range(15)]
+        out = dispatch.changed_file_links(self.URL, "b", files, 3, limit=12)
+        self.assertNotIn("issue.md", out)
+        self.assertIn("and 3 more in the pull request", out)
+
+    def test_no_files_no_section(self) -> None:
+        self.assertEqual(dispatch.changed_file_links(self.URL, "b", [], 3), "")
+
+
 class NoCommitCallSiteTests(unittest.TestCase):
     def test_a_run_without_a_commit_is_a_declined_step_not_a_refusal(self) -> None:
         """The path that stopped brevkoll#15 sits in main(), which needs a model run; check the source instead."""

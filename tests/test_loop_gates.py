@@ -206,6 +206,54 @@ class GateTests(unittest.TestCase):
         self.g.comment("owner/app", 1, "🛑 CHECKPOINT x-retry: a step failed\n<!--factory:resume=after_gate3;retry-of=after_gate3-->")
         self.assertEqual(orchestrate.consecutive_failures(self.g, "owner/app", 1, "after_gate3"), 1)  # type: ignore[arg-type]
 
+    # -- every checkpoint links what the owner has to read
+    BASE = "https://gitea.example/owner/app/src/branch/agent/issue-1"
+
+    def test_the_questions_checkpoint_links_the_research_and_the_threat_model(self) -> None:
+        self.commit_file("threat-model.md", "| R1 | ACCEPTED |\n")
+        self.checkpoint("after_gate2")
+        self.agent_files["research"] = "# Research\n\n## Open questions for the human\n\n- Is X in scope?\n"
+        self.go()
+        text = self.bot()
+        self.assertIn("### Files to check", text)
+        self.assertIn(f"]({self.BASE}/thoughts/1/research.md)", text)
+        self.assertIn(f"]({self.BASE}/thoughts/1/threat-model.md)", text)
+
+    def test_the_plan_checkpoint_links_the_plan_and_the_decisions_only_if_they_exist(self) -> None:
+        self.commit_file("threat-model.md", "| R1 | ACCEPTED |\n")
+        self.checkpoint("after_gate2")
+        self.agent_files.update(research="# Research\n", plan=PLAN)
+        self.go()
+        self.assertIn(f"]({self.BASE}/thoughts/1/plan.md)", self.bot())
+        self.assertNotIn("docs/decisions", self.bot())  # no ADR folder on the branch: no dead link
+        (self.clone / "docs" / "decisions").mkdir(parents=True)
+        (self.clone / "docs" / "decisions" / "0001-x.md").write_text("adr")
+        git(self.clone, "add", "-A")
+        git(self.clone, "commit", "-q", "-m", "adr", email=self.AGENT)
+        git(self.clone, "push", "-q", "origin", "agent/issue-1")
+        self.checkpoint("after_gate3", "3", extra=";rework=ok")
+        self.g.comment("owner/app", 1, "/rework x")
+        self.agent_files["plan"] = PLAN + "\nv2\n"
+        orchestrate.process(self.g, "owner/app", 1)  # type: ignore[arg-type]
+        self.assertIn(f"]({self.BASE}/docs/decisions)", self.bot())
+
+    def test_the_review_checkpoint_links_the_reports_and_the_pull_request(self) -> None:
+        self.commit_file("validation.md", "# Validation\n")
+        self.commit_file("acceptance.md", "- [ ] try it\n")
+        self.prepare_build()
+        self.go()
+        text = self.bot()
+        self.assertIn("CHECKPOINT 4", text)
+        self.assertIn(f"]({self.BASE}/thoughts/1/validation.md)", text)
+        self.assertIn(f"]({self.BASE}/thoughts/1/acceptance.md)", text)
+        self.assertIn("https://gitea.example/pr/7/files", text)
+
+    def test_a_failed_step_checkpoint_still_links_what_to_look_at(self) -> None:
+        self.commit_file("plan.md", PLAN, email=self.AGENT)
+        self.checkpoint("after_gate3", "3")
+        self.assertEqual(self.go("/go"), "needs human")  # a draft plan: the options message
+        self.assertIn(f"]({self.BASE}/thoughts/1/plan.md)", self.bot())
+
     # -- gate 3 and 4: build, red CI, rework, review
     def prepare_build(self) -> None:
         self.commit_file("plan.md", PLAN.replace("draft", "approved"), email=WEB_EDITOR)

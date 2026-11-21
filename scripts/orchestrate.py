@@ -229,6 +229,46 @@ def refresh_board() -> None:
         log(f"could not commit factory metrics: {(e.stderr or '')[-200:]}")
 
 
+# What the owner has to look at to answer each checkpoint, so they never go looking for it. {n} is the issue number.
+# A trailing slash is a folder. Only what exists on the branch is linked.
+FILES_TO_CHECK: dict[str, list[tuple[str, str]]] = {
+    "after_gate1": [("thoughts/{n}/spec.md", "the spec (approve it with `Status: approved`)"),
+                    ("tests/holdout/", "the acceptance tests that will judge the build")],
+    "after_gate2": [("thoughts/{n}/threat-model.md", "the threat model: decide every `PROPOSED` row")],
+    "after_research_questions": [("thoughts/{n}/research.md", "the research and its open questions"),
+                                 ("thoughts/{n}/threat-model.md", "the threat model you decided")],
+    "after_gate3": [("thoughts/{n}/plan.md", "the plan (`Status: approved`, or send it back)"),
+                    ("docs/decisions/", "the decisions (ADRs) the plan proposes")],
+    "after_plan_rework": [("thoughts/{n}/plan.md", "the plan")],
+    "after_gate4": [("thoughts/{n}/validation.md", "the validation report"),
+                    ("thoughts/{n}/acceptance.md", "the checklist for your phone")],
+    "after_staging_rework": [("thoughts/{n}/validation.md", "the validation report"),
+                             ("thoughts/{n}/acceptance.md", "the checklist for your phone")],
+    "after_timebox": [("thoughts/{n}/plan.md", "the plan and its checkboxes")],
+    "manual": [("thoughts/{n}/plan.md", "the plan and its checkboxes"), ("thoughts/{n}/validation.md", "the validation report")],
+}
+
+
+def files_section(ctx: Ctx, resume: str) -> str:
+    """The links for a checkpoint: each file the owner must read (only if it exists on the branch) and the pull request with
+    every change. Best effort: a Gitea or git hiccup returns what it has, never an exception."""
+    rows: list[str] = []
+    try:
+        sh("git", "fetch", "-q", "origin", cwd=ctx.clone)
+    except Exception:  # noqa: BLE001
+        pass
+    for path, why in FILES_TO_CHECK.get(resume, []):
+        path = path.format(n=ctx.n)
+        if subprocess.run(["git", "cat-file", "-e", f"origin/{ctx.branch}:{path.rstrip('/')}"], cwd=ctx.clone,
+                          capture_output=True, check=False).returncode == 0:
+            rows.append(f"- [{path}]({ctx.url('/src/branch/' + ctx.branch + '/' + path.rstrip('/'))}): {why}")
+    try:
+        rows.append(f"- [Pull request: every change on this branch]({ctx.pr()['html_url']}/files)")
+    except Exception:  # noqa: BLE001 - no open PR yet
+        pass
+    return ("### Files to check\n\n" + "\n".join(rows)) if rows else ""
+
+
 def checkpoint(ctx: Ctx, label: str, title: str, body: str, resume: str, stop: str = "", extra: str = "",
                rework: bool = False) -> None:
     refresh_board()
@@ -236,7 +276,8 @@ def checkpoint(ctx: Ctx, label: str, title: str, body: str, resume: str, stop: s
     marker = f"<!--factory:resume={resume};stop={stop}{';' + extra if extra else ''}-->"
     reply = ("Reply `/go minutes=N` to accept, `/rework <what is wrong>` to send it back, or `/stop` to stop."
              if rework else "Reply `/go minutes=N` to continue or `/stop` to stop.")
-    text = (f"{CP_PREFIX} {label}: {title}\n\n{body}\n\n{ctx.status_line()}\n\n"
+    files = files_section(ctx, resume)
+    text = (f"{CP_PREFIX} {label}: {title}\n\n{body}\n\n{files + chr(10) * 2 if files else ''}{ctx.status_line()}\n\n"
             f"{reply}\n{marker}")
     c = ctx.comment(text)
     log(f"{ctx.app}#{ctx.n}: CHECKPOINT {label} posted (comment {c['id']}), resume={resume}")

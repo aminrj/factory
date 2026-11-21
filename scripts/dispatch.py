@@ -152,6 +152,17 @@ def plan_status_problem(plan: str) -> str | None:
     return None if status == "draft" else f"plan.md says 'Status: {status or '?'}' after the plan step; it must say 'Status: draft'."
 
 
+def changed_file_links(repo_url: str, branch: str, files: list[str], n: int, limit: int = 12) -> str:
+    """Links to the files an agent step changed, the thoughts of this issue first, so the owner reads them straight away."""
+    base = repo_url.removesuffix(".git")
+    files = sorted({f for f in files if f and f != f"thoughts/{n}/issue.md"},
+                   key=lambda f: (not f.startswith(f"thoughts/{n}/"), f))
+    rows = [f"- [{f}]({base}/src/branch/{branch}/{f})" for f in files[:limit]]
+    if len(files) > limit:
+        rows.append(f"- and {len(files) - limit} more in the pull request")
+    return "### Files this step changed\n\n" + "\n".join(rows) if rows else ""
+
+
 def write_issue_snapshot(g: Gitea, repo: str, n: int, wt: Path) -> None:
     issue = g.get(f"/repos/{repo}/issues/{n}")
     comments = [c for c in g.get(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
@@ -286,8 +297,11 @@ def main() -> None:
         pr = g.call("POST", f"/repos/{repo}/pulls", {
             "head": branch, "base": "main", "title": f"WIP: issue #{n}", "body": f"Refs #{n}"})
     summary = str(result.get("result", ""))[:3500]
+    changed = run("git", "diff", "--name-only", f"{head_before}..HEAD", cwd=wt).splitlines()
+    links = changed_file_links(g.repo_url(repo), branch, changed, n)
     g.comment(repo, n, f"Agent step `{step}` finished in {duration / 60:.1f} min "
-                       f"(cost {record['cost_usd']} USD). PR: #{pr['number']}\n\n{summary}")
+                       f"(cost {record['cost_usd']} USD). PR: #{pr['number']}\n\n{summary}\n\n{links}\n"
+                       f"- [Pull request: every change]({pr['html_url']}/files)")
     lid = g.label_id(repo, f"agent:{step}")
     labels = g.get(f"/repos/{repo}/issues/{n}/labels")
     if lid and any(label["id"] == lid for label in labels):
