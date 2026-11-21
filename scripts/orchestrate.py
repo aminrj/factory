@@ -280,10 +280,36 @@ def open_questions(research: str) -> list[str]:
 
 
 # ---------------------------------------------------------------- handlers (one per gate)
+STATUS_LINE = re.compile(r"^\**Status:\**\s*(draft|approved)\b", re.IGNORECASE | re.MULTILINE)
+
+
+def spec_approval_problem(clone: Path, branch: str, n: int, spec: str, human_email: str) -> str | None:
+    """A spec with a `Status:` line needs `Status: approved`, introduced by a commit of the human (like the plan gate).
+    Specs without the line (older apps) keep the old behaviour. Returns the problem to show, or None."""
+    m = STATUS_LINE.search(spec)
+    if not m:
+        return None
+    if m.group(1).lower() != "approved":
+        return ("`spec.md` says `Status: draft`. Review the spec and `tests/holdout/`, change the line to `Status: approved` "
+                "in a commit of your own (the pencil icon in Gitea works) and reply `/go` again.")
+    out = sh("git", "log", "-G", r"Status:.*approved", "--format=%ae", f"origin/{branch}", "--", f"thoughts/{n}/spec.md",
+             cwd=clone)
+    authors = out.splitlines()
+    if not authors:
+        return "`Status: approved` is not in any commit yet."
+    if authors[0] != human_email:
+        return ("`Status: approved` was committed by someone other than you. Approving is yours: make the change in a "
+                "commit of your own.")
+    return None
+
+
 def after_gate1(ctx: Ctx) -> None:
     spec = ctx.branch_file("spec.md")
     if "<" in spec:
         raise NeedsHuman("`spec.md` still contains `<` placeholders. Fix them, push, then reply `/go` again.")
+    problem = spec_approval_problem(ctx.clone, ctx.branch, ctx.n, spec, sh("git", "config", "user.email", cwd=ctx.clone))
+    if problem:
+        raise NeedsHuman(problem)
     ctx.record_minutes("spec")
     dispatch(ctx, "threat-model")
     ctx.g.set_stage(ctx.repo, ctx.n, "spec-ready")

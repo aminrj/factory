@@ -141,6 +141,43 @@ class ReworkAndStagingTests(unittest.TestCase):
         self.assertIn("no model configured", text)
 
 
+class SpecApprovalTests(unittest.TestCase):
+    HUMAN = "me@example.com"
+
+    def repo(self, tmp: str, commits: list[tuple[str, str, str]]) -> Path:
+        import subprocess
+
+        r = Path(tmp)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(r)], check=True)
+        (r / "thoughts" / "1").mkdir(parents=True)
+        for email, text, msg in commits:
+            (r / "thoughts" / "1" / "spec.md").write_text(text)
+            subprocess.run(["git", "add", "-A"], cwd=r, check=True)
+            subprocess.run(["git", "-c", f"user.email={email}", "-c", "user.name=x", "commit", "-q", "-m", msg], cwd=r, check=True)
+        subprocess.run(["git", "update-ref", "refs/remotes/origin/agent/issue-1", "HEAD"], cwd=r, check=True)
+        return r
+
+    def check(self, commits: list[tuple[str, str, str]]) -> str | None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            repo = self.repo(d, commits)
+            spec = (repo / "thoughts" / "1" / "spec.md").read_text()
+            return orchestrate.spec_approval_problem(repo, "agent/issue-1", 1, spec, self.HUMAN)
+
+    def test_draft_is_refused(self) -> None:
+        self.assertIn("draft", self.check([("bot@x", "Status: draft\n", "d")]))  # type: ignore[arg-type]
+
+    def test_approval_by_the_human_passes(self) -> None:
+        self.assertIsNone(self.check([("bot@x", "Status: draft\n", "d"), (self.HUMAN, "Status: approved\n", "a")]))
+
+    def test_approval_by_someone_else_is_refused(self) -> None:
+        self.assertIn("someone other", self.check([("bot@x", "Status: approved\n", "d")]))  # type: ignore[arg-type]
+
+    def test_a_spec_without_a_status_line_keeps_the_old_behaviour(self) -> None:
+        self.assertIsNone(self.check([("bot@x", "# Spec\n", "d")]))
+
+
 class PrBodyTests(unittest.TestCase):
     def test_pr_body_does_not_use_a_closing_keyword(self) -> None:
         src = (ROOT / "scripts" / "dispatch.py").read_text()
