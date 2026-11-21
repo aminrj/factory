@@ -5,3 +5,4 @@
 {"ts": "2026-11-20T18:09:44+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 1, "comment_id": 197}
 {"ts": "2026-11-20T18:25:14+01:00", "repo": "brevkoll", "issue": 1, "gate": "plan_review", "minutes": 1, "comment_id": 230}
 {"ts": "2026-11-20T20:00:29+01:00", "repo": "brevkoll", "issue": 1, "gate": "code_review", "minutes": 1, "comment_id": 251}
+{"ts": "2026-11-21T07:59:12+01:00", "repo": "brevkoll", "issue": 15, "gate": "threat_model", "minutes": 10, "comment_id": 420}
