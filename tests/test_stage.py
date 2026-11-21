@@ -65,10 +65,25 @@ class StageTests(unittest.TestCase):
 
         with mock.patch.object(stage.urllib.request, "urlopen", raising(401)), self.assertRaises(stage.StageError):
             stage.preflight_model(model)
+        with mock.patch.object(stage.urllib.request, "urlopen", raising(403)), self.assertRaises(stage.StageError):
+            stage.preflight_model(model)
+        with mock.patch.object(stage.urllib.request, "urlopen", raising(400)):
+            self.assertIn("key accepted", stage.preflight_model(model))
         with mock.patch.object(stage.urllib.request, "urlopen", raising(503)):
             self.assertIn("busy", stage.preflight_model(model))
         with mock.patch.object(stage.urllib.request, "urlopen", side_effect=OSError("down")), self.assertRaises(stage.StageError):
             stage.preflight_model(model)
+
+    def test_the_probe_posts_an_empty_body_to_the_chat_route(self) -> None:
+        seen = {}
+
+        def fake(req: object, timeout: int = 0):  # noqa: ANN202
+            seen["url"], seen["data"], seen["auth"] = req.full_url, req.data, req.get_header("Authorization")  # type: ignore[attr-defined]
+            raise stage.urllib.error.HTTPError("u", 400, "m", {}, None)  # type: ignore[arg-type]
+
+        with mock.patch.object(stage.urllib.request, "urlopen", fake):
+            stage.preflight_model({"LLM_BASE_URL": "http://h/v1/", "LLM_API_KEY": "k"})
+        self.assertEqual(seen, {"url": "http://h/v1/chat/completions", "data": b"{}", "auth": "Bearer k"})
 
     def test_a_pr_build_needs_an_open_pr(self) -> None:
         class G:

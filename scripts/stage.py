@@ -10,8 +10,9 @@ Usage:
 Rules (the human only clicks the link):
   - Only a commit whose four required checks are green on Gitea is staged, and a PR build only while its PR is open
     (a merged or stale branch is refused: it would not be the code the owner is about to merge).
-  - Before the build, the model is asked for its model list with the configured key (nothing is loaded). A rejected key
-    or an unreachable endpoint stops staging; a busy or loading model is reported and staging goes on.
+  - Before the build, the chat route is probed with an empty body and the configured key (refused before any inference,
+    so nothing is loaded; the model list is open and proves nothing). A rejected key or an unreachable endpoint stops
+    staging; a busy or loading model is reported and staging goes on.
   - The sandbox policy is fixed here, not chosen per app: read-only root, no capabilities, no new privileges,
     memory and pid limits, tmpfs for /tmp and /data, one container per app, restarts with the devbox.
   - The model comes from ~/.config/factory/staging.env (bring your own model: any OpenAI-compatible endpoint;
@@ -170,15 +171,23 @@ def wait_healthy(url: str, timeout: int = 90) -> None:
 
 
 def preflight_model(model: dict[str, str]) -> str:
-    """Ask the endpoint for /models with the configured key. Returns a short status for the review comment."""
-    url = model["LLM_BASE_URL"].rstrip("/") + "/models"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {model['LLM_API_KEY']}"} if model.get("LLM_API_KEY") else {})
+    """Probe the endpoint's chat route with an empty body and the configured key. The model list is often open, so
+    it proves nothing about the key. An empty body is refused before any inference, so nothing is loaded:
+    401/403 = key rejected, 400/422 = key accepted, 502/503 = busy or loading. Returns a status for the review comment."""
+    url = model["LLM_BASE_URL"].rstrip("/") + "/chat/completions"
+    headers = {"Content-Type": "application/json"}
+    if model.get("LLM_API_KEY"):
+        headers["Authorization"] = f"Bearer {model['LLM_API_KEY']}"
+    req = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:  # noqa: S310
-            return "reachable" if r.status == 200 else f"answered {r.status}"
+            return "reachable, key accepted" if r.status == 200 else f"answered {r.status}"
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
-            raise StageError(f"The model endpoint rejected the configured key ({e.code}). Fix LLM_API_KEY in staging.env.") from e
+            raise StageError(f"The model endpoint rejected the configured key ({e.code}). Fix LLM_API_KEY in staging.env "
+                             "or the file LLM_API_KEY_FILE points at.") from e
+        if e.code in (400, 422):
+            return "reachable, key accepted"
         if e.code in (502, 503):
             return "busy or loading (the first decode may answer 503)"
         return f"answered {e.code}"
