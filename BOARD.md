@@ -1,18 +1,24 @@
 # Board
 
-_Generated 2026-11-21 05:57 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-21 06:52 UTC by `scripts/collect_metrics.py`._
+
+## Waiting for you
+
+| Where | Checkpoint | Since | Hours |
+|---|---|---|---|
+| (nothing) | | | |
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
+| (none) | |
 
 ## spec-ready
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
 
 ## building
 
