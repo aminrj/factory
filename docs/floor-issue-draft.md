@@ -3,7 +3,7 @@
 (Draft. To be posted as an issue in the `factory-floor` repo as soon as that repo exists on Gitea; at the time of writing the API returns 404.)
 
 The quality-guards build adds five data sources. Field lists, units, one example line each and the writer are in
-[`docs/data-contracts.md`](https://gitea.lab.aminrj.com/amine/factory/src/branch/feat/quality-jobs/docs/data-contracts.md) (branch `feat/quality-jobs` until merged):
+[`docs/data-contracts.md`](data-contracts.md):
 
 - `data/health.jsonl` (nightly, per app)
 - `data/lookbacks.jsonl` (daily check, a line per 14 and 30 day review)

@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mirror  # noqa: E402
 from gitea import Gitea  # noqa: E402
 
 WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
@@ -458,7 +459,11 @@ def after_gate4(ctx: Ctx) -> None:
     ctx.record_minutes("code_review")
     sh("git", "checkout", "-q", "main", cwd=ctx.clone)
     sh("git", "pull", "-q", "--ff-only", "origin", "main", cwd=ctx.clone)
-    sh("git", "push", "-q", "github", "main", cwd=ctx.clone)
+    try:
+        mirror.push(ctx.clone)  # refuses when the new commits add internal hostnames or addresses
+    except SystemExit as e:
+        raise NeedsHuman(f"{e}\n\nMerged on Gitea, but `main` was NOT pushed to the GitHub mirror. Fix the names in a "
+                         "new PR, then reply `/go` again.") from e
     log(f"{ctx.app}#{ctx.n}: merged PR #{pr['number']}, pushed main to github")
     checkpoint(ctx, "4b", "merged and mirrored; the release is not automated yet",
                f"PR #{pr['number']} is merged and `main` is on the GitHub mirror. The release steps (tag, image build, "
