@@ -6,3 +6,14 @@
 {"ts": "2026-11-21T08:42:17+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate3", "answer": "go", "wait_min": 1.1, "comment_id": 459}
 {"ts": "2026-11-21T08:43:22+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate3", "answer": "go", "wait_min": 0.7, "comment_id": 463}
 {"ts": "2026-11-21T08:55:52+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate3", "answer": "go", "wait_min": 3.8, "comment_id": 489}
+{"ts": "2026-11-21T09:08:52+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 9.5, "comment_id": 510}
+{"ts": "2026-11-21T09:12:22+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_staging_rework", "answer": "go", "wait_min": 0.5, "comment_id": 524}
+{"ts": "2026-11-21T13:15:12+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 14.7, "comment_id": 554}
+{"ts": "2026-11-21T14:13:02+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate4", "answer": "go", "wait_min": 53.9, "comment_id": 584}
+{"ts": "2026-11-21T14:14:12+01:00", "repo": "brevkoll", "issue": 15, "checkpoint": "after_gate4", "answer": "go", "wait_min": 0.5, "comment_id": 587}
+{"ts": "2026-11-21T15:06:32+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate1", "answer": "go", "wait_min": 38.6, "comment_id": 608}
+{"ts": "2026-11-21T15:09:48+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate1", "answer": "go", "wait_min": 3.1, "comment_id": 614}
+{"ts": "2026-11-21T15:10:52+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate1", "answer": "go", "wait_min": 1.0, "comment_id": 618}
+{"ts": "2026-11-21T16:08:03+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate2", "answer": "go", "wait_min": 54.3, "comment_id": 630}
+{"ts": "2026-11-21T16:12:48+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_research_questions", "answer": "go", "wait_min": 1.5, "comment_id": 638}
+{"ts": "2026-11-21T16:17:08+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_research_questions", "answer": "go", "wait_min": 3.5, "comment_id": 642}

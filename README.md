@@ -4,8 +4,8 @@ I am building small AI apps for real people through a gated software factory, in
 
 - **Live board:** [BOARD.md](BOARD.md): every idea, its named user, its timebox, and whether it shipped or got killed.
 - **Template:** [aminrj/factory-template](https://github.com/aminrj/factory-template), the repo every app starts from.
-- **Metrics:** [data/SUMMARY.md](data/SUMMARY.md), collected from the app repos by [scripts/collect_metrics.py](scripts/collect_metrics.py), which I run by hand each week.
-- **Log:** [log/](log/), one entry per week and one ship note per app.
+- **Metrics:** [data/SUMMARY.md](data/SUMMARY.md), collected from the app repos by [scripts/collect_metrics.py](scripts/collect_metrics.py) at every checkpoint.
+- **Log:** [log/](log/), one entry per week and one ship note per app. Retros in [retros/](retros/), release records in [docs/releases/](docs/releases/).
 - **Playbook:** [PLAYBOOK.md](PLAYBOOK.md), how the factory runs.
 
 ## How it works
@@ -18,11 +18,11 @@ Agents write the code. I own the decisions, at the points where they are still c
 | 2. Threat model | Every AI and web risk, and the control that handles it | `thoughts/<n>/threat-model.md` |
 | 3. Plan | Types, signatures, vertical slices | `thoughts/<n>/plan.md` |
 | 4. Slices | Agent implements one phase per session, checks between phases | commits |
-| 5. Review | I read the diff; CI runs security scans and the holdout tests | pull request |
-| 6. Deploy | Merge the GitOps PR | homelab |
+| 5. Try it and review | I use the staged build on my phone and read the diff; CI runs security scans and the holdout tests | staged build, pull request |
+| 6. Promote | Merge the GitOps PR | homelab |
 | 7. Evaluate | Keep, iterate or kill after 14 days | board |
 
-Every PR records my minutes per gate. That is the data this project exists to collect.
+I answer each gate with a comment on the Gitea work issue (`/go minutes=N`, `/rework <note>`, `/stop`), and a small process, the foreman, runs the next agent step. Every gate records my minutes. That is the data this project exists to collect.
 
 ## Rules
 
@@ -36,8 +36,8 @@ Every PR records my minutes per gate. That is the data this project exists to co
 
 | App | User | Status | Repo |
 |---|---|---|---|
-| brevkoll: Swedish letter decoder for parents | My household, then school parents | Building | [aminrj/brevkoll](https://github.com/aminrj/brevkoll) |
+| brevkoll: Swedish letter decoder for parents | My household, then school parents | v0.1.0 released, not yet used by its named user; getting ready for the cluster | [aminrj/brevkoll](https://github.com/aminrj/brevkoll) |
 
 ## Where this runs
 
-The primary home is a private Gitea instance on my homelab: repos, issues, pull requests and CI. This GitHub repository is a read-only public mirror, with Actions, Issues, Projects and Wiki turned off. Agents are dispatched from my machine with [scripts/dispatch.py](scripts/dispatch.py), one step at a time, inside a git worktree. The board is the `stage/*` labels, rendered to [BOARD.md](BOARD.md).
+The primary home is a private Gitea instance on my homelab: repos, issues, pull requests and CI. This GitHub repository is a read-only public mirror, with Actions, Issues, Projects and Wiki turned off. The foreman ([scripts/orchestrate.py](scripts/orchestrate.py)) runs every minute on my machine, reads my commands on the work issues and dispatches agents with [scripts/dispatch.py](scripts/dispatch.py), one step at a time, inside a git worktree. Before a review it stages the pull request in a sandboxed container I open from my phone. The board is the `stage/*` labels, rendered to [BOARD.md](BOARD.md).

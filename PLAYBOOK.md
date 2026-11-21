@@ -2,9 +2,9 @@
 
 > A lit software factory for a team of one. I am the first client. Every app I ship through it is a product, a demo, and data for a talk. After three shipped apps, the factory itself becomes the FDE offer.
 
-**Status:** Phase 0 · **Owner:** Amine · **Started:** 2026-11-20
+**Status:** Phase 1: app #1 (brevkoll) released as v0.1.0 on 2026-11-20, not yet used by its named user; changes run through the foreman · **Owner:** Amine · **Started:** 2026-11-20 · **Docs checked against the code:** 2026-11-21
 
-> **Where it runs (updated 2026-11-20).** Gitea on my homelab is primary: repos (private), issues, labels, pull requests and CI (a self-hosted Gitea runner). GitHub holds public, read-only mirrors of the factory repos and nothing else: no Actions, Issues, Projects or Wiki. The board is the `stage/*` labels, rendered to `BOARD.md`. Agents are dispatched from my machine (`scripts/dispatch.py`), not from CI.
+> **Where it runs (updated 2026-11-21).** Gitea on my homelab is primary: repos (private), issues, labels, pull requests and CI (a self-hosted Gitea runner). GitHub holds public, read-only mirrors of the factory repos and nothing else: no Actions, Issues, Projects or Wiki. The board is the `stage/*` labels, rendered to `BOARD.md`. The **foreman** (`scripts/orchestrate.py`, a systemd user timer every minute) reads my commands on the work issue and runs each agent step through `scripts/dispatch.py` on the GPU workstation, not in CI. Moving it to the always-on devbox VM is prepared in `ops/devbox/` and not done yet (section 4a).
 >
 > Where this playbook and the files in `factory-template` or `scripts/` differ, the files win. Sections 6 to 8 still show the original GitHub-based drafts of the template files (paths, `gates.yml`, `release.yml`); the repo has the current `.gitea/workflows/gates.yml`, and there is no `release.yml` (images are built locally). Sections 15 to 18 cover the agent pipeline, building in public, Hermes and the data I collect.
 
@@ -110,9 +110,9 @@ I log my real minutes per gate in the PR template. **That number is the most val
 
 ### 4a. Try it, then promote
 
-Everything is said over Git. The human clicks links in Gitea comments. **No link or hostname is ever written to a tracked file or posted on GitHub:** `scripts/mirror.py` blocks every push to a mirror that adds tailnet names, lab names or private addresses (extra patterns go in the untracked `~/.config/factory/mirror-deny.txt`).
+Everything is said over Git. The human clicks links in Gitea comments. **No link or hostname is ever written to a tracked file or posted on GitHub:** `scripts/mirror.py` publishes `main` to a mirror as one snapshot commit (the private history stays on Gitea) and refuses when any file of `main` holds tailnet names, lab names or private addresses (extra patterns go in the untracked `~/.config/factory/mirror-deny.txt`). A leak is fixed by a new commit that removes it; nothing else is needed.
 
-**Staging (gate 5).** When `checks`, `gates`, `security` and `holdout` are green, the orchestrator runs `scripts/stage.py up <app> <issue>`. It builds the PR head, starts it in the fixed sandbox on the devbox (read-only root, no capabilities, no new privileges, memory and pid limits, `/tmp` and `/data` as tmpfs) and posts the review checkpoint on the Gitea issue with:
+**Staging (gate 5).** When `checks`, `gates`, `security` and `holdout` are green, the foreman runs `scripts/stage.py up <app> <issue>`. It builds the PR head, starts it in the fixed sandbox on the machine that runs the foreman, today the GPU workstation (read-only root, no capabilities, no new privileges, memory and pid limits, `/tmp` and `/data` as tmpfs) and posts the review checkpoint on the Gitea issue with:
 
 - the link to the staged build (tailnet only) and the same link by IP,
 - `thoughts/<n>/acceptance.md`, the checklist the `validate` step writes from the spec's acceptance criteria,
@@ -122,33 +122,55 @@ The staged build is removed on merge or `/stop`. `stage.py status` lists what ru
 
 **What an app must satisfy** (`docs/deploy.md` in every app repo, checked by `validate`): a `CMD` with `--host` and `--port`, `GET /healthz`, a non-root user, writes only to `/tmp` and `/data`, settings from environment variables, one replica unless it says why not.
 
-**Model: bring your own.** An app needs only an OpenAI-compatible endpoint: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`, optional `LLM_TLS_CA_FILE`, `LLM_TLS_CERT_FILE`, `LLM_TLS_KEY_FILE` (client certificate). On the owner's devbox these come from the untracked `~/.config/factory/staging.env` (plus `apps/<app>.env`); on the cluster from an ExternalSecret. The homelab model route (a mutual-TLS front end on the GPU machine, a shared `factory` client identity) is one profile of that contract, not part of the factory. *Known gap:* anyone else running the factory supplies their own endpoint and must write down its busy and off behaviour; the factory has no model of its own.
+**Model: bring your own.** An app needs only an OpenAI-compatible endpoint: `LLM_BASE_URL`, `LLM_MODEL`, optional `LLM_API_KEY`, optional `LLM_TLS_CA_FILE`, `LLM_TLS_CERT_FILE`, `LLM_TLS_KEY_FILE` (client certificate). On the staging machine these come from the untracked `~/.config/factory/staging.env` (plus `apps/<app>.env`); on the cluster from an ExternalSecret. The homelab model route (a mutual-TLS front end on the GPU machine, a shared `factory` client identity) is one profile of that contract, not part of the factory. *Known gap:* anyone else running the factory supplies their own endpoint and must write down its busy and off behaviour; the factory has no model of its own.
 
 **A change on an existing app (gate 1).** `scripts/new_change.py <app> <title> --seed <dir>` opens the work issue, commits the draft spec (`Status: draft`) and the draft holdout tests on `agent/issue-<n>` as `factory-orchestrator`, and posts Checkpoint 1. Gate 1 only passes when `Status: approved` was introduced by a commit of the owner (the same rule as the plan gate); approving makes the spec and the tests the owner's. The holdout tests of a UI change check what a machine can check (weight budget, same-origin only, no extra script, no decorative effects, labels, dark mode, reduced motion, the result contract); how it looks is judged by the owner on the staged build.
 
-**The runtime checkout is sacred.** The timers run `factory/scripts/` straight from the `factory/` folder, so that folder must stay on `main` with no local code changes. All dev work (by a person or a session) happens in a worktree: `git worktree add ../worktrees/factory-<topic> -b <branch> origin/main`. The tick refuses to run, and pushes a priority-5 notification once, when the checkout is on another branch or has uncommitted changes in `scripts/`, `tests/` or `PLAYBOOK.md`; `doctor.py` shows the same as a FAIL. When the checkout is clean and on `main` the tick fast-forwards it to `origin/main`, so a merge takes effect within a minute. (Found when a session switched branches there and the owner's `/go` was silently ignored.) The orchestrator's own `Metrics refresh` commits (only `BOARD.md` and `data/`) are the one exception: when a merge lands at the same moment and the push is rejected, the tick puts them on top of `origin/main` and pushes again instead of pausing (it paused once, 2026-11-21, on exactly that race); anything else committed locally in the runtime still pauses it.
+**Name.** The process that reads `/go`, `/stop` and `/rework`, runs the next step and posts the checkpoints is the **foreman**. Its code is `scripts/orchestrate.py` (the file name is kept so history, tests and units keep working) and it runs from the `factory-tick` timer. Git identities such as `factory-orchestrator` are unchanged on purpose: commit history and the runtime hook rely on them.
 
-**Two sessions, one repo.** `python3 factory/scripts/doctor.py --install-hooks` installs git hooks in the runtime folder: a commit there is refused unless it is the orchestrator's (metrics), and switching it off `main` prints a warning. Worktrees of the same repo are not affected. The tick also pauses when the runtime has local commits that block the fast-forward. Never probe these guards on the live runtime folder: test them on a scratch repo, as `tests/test_doctor.py` does.
+**The runtime checkout is sacred.** The timers run `factory/scripts/` straight from the `factory/` folder, so that folder must stay on `main` with no local code changes. All dev work (by a person or a session) happens in a worktree: `git worktree add ../worktrees/factory-<topic> -b <branch> origin/main`. The tick refuses to run, and pushes a priority-5 notification once, when the checkout is on another branch or has uncommitted changes in `scripts/`, `tests/` or `PLAYBOOK.md`; `doctor.py` shows the same as a FAIL. When the checkout is clean and on `main` the tick fast-forwards it to `origin/main`, so a merge takes effect within a minute. (Found when a session switched branches there and the owner's `/go` was silently ignored.) The foreman's own `Metrics refresh` commits (only `BOARD.md` and `data/`) are the one exception: when a merge lands at the same moment and the push is rejected, the tick puts them on top of `origin/main` and pushes again instead of pausing (it paused once, 2026-11-21, on exactly that race); anything else committed locally in the runtime still pauses it.
+
+**Two sessions, one repo.** `python3 factory/scripts/doctor.py --install-hooks` installs git hooks in the runtime folder: a commit there is refused unless it is the foreman's (metrics), and switching it off `main` prints a warning. Worktrees of the same repo are not affected. The tick also pauses when the runtime has local commits that block the fast-forward. Never probe these guards on the live runtime folder: test them on a scratch repo, as `tests/test_doctor.py` does.
 
 **No silent ignores, and a loop test.** A `/go` may carry a note on the same line (`/go minutes=5 looks good`). A comment that starts with `/` and is not a command gets one reply listing what is accepted. `orchestrate.py status` and `BOARD.md` show what waits for the owner and since when; the tick pushes a reminder after 4 hours and every 6 hours after that (`FACTORY_REMIND_AFTER_H`, `FACTORY_REMIND_EVERY_H`). Every answer is timed: `data/gate_waits.jsonl` feeds a table in `SUMMARY.md` (how long a checkpoint waits for the owner, by gate). `tests/test_loop_smoke.py` and `tests/test_loop_gates.py` walk a work item through every gate (decisions, research questions, plan, build with red CI and rework, the review checkpoint, `/rework`, the merge and the mirror, `/stop`) with the real orchestrator code against a fake Gitea, and `tests/test_dispatch_entry.py` covers the entry gate of an agent step against real git; each bug found on the first real run fails it when re-introduced. A new check needs a test with a known-bad input, not only a good one.
 
 **Answering the plan checkpoint.** Three ways, none of them an error: approve (`Status: approved` in your own commit, then `/go`), send it back (`/rework <what to change>`), or edit the file yourself, set `Status: rework` and reply `/go`. A rework runs the planner once more with your note, the comments you wrote since it last ran, and your edits to `plan.md` as a diff (all data, not instructions); it must hand back a draft, and the checkpoint opens again. A plain `/go` on a plan that is still a draft says what to do instead of failing. `minutes=5min` is read as 5. (Found on brevkoll#15: the owner's comment and edits were never sent anywhere, and `/go` on a plan marked for rework ended in a "step failed" retry.)
 
-**When the orchestrator dies, and `/stop` during a build.** A step that was claimed ("Picked up `/go`") but never reported (a restart, a kill, the out-of-memory killer, an unexpected error) used to leave the item silent: the last word was a claim, so no `/go` was read and nothing was listed as waiting. Now the tick finds such an item (its lock is free, because the OS releases it when the process ends; verified with `kill -9`), posts a checkpoint "the orchestrator stopped while running a step" with the handler to run again, and pushes once; `status` shows `STUCK` meanwhile. Re-running is safe: a phase is counted once its commit exists, and a typed `/rework` note is kept until the plan is back. A `/stop` written during a build is heard before each phase and before validation (a build runs inside one tick, so it used to be unreachable for hours); it is not heard in the middle of one agent run (up to 45 minutes). Known limit: if the process dies after an agent step committed but before the checkpoint, the retry runs that step again and may report "the agent produced no commit"; it costs one more run, nothing is lost.
+**When the foreman dies, and `/stop` during a build.** A step that was claimed ("Picked up `/go`") but never reported (a restart, a kill, the out-of-memory killer, an unexpected error) used to leave the item silent: the last word was a claim, so no `/go` was read and nothing was listed as waiting. Now the tick finds such an item (its lock is free, because the OS releases it when the process ends; verified with `kill -9`), posts a checkpoint "the foreman stopped while running a step" with the handler to run again, and pushes once; `status` shows `STUCK` meanwhile. Re-running is safe: a phase is counted once its commit exists, and a typed `/rework` note is kept until the plan is back. A `/stop` written during a build is heard before each phase and before validation (a build runs inside one tick, so it used to be unreachable for hours); it is not heard in the middle of one agent run (up to 45 minutes). Known limit: if the process dies after an agent step committed but before the checkpoint, the retry runs that step again and may report "the agent produced no commit"; it costs one more run, nothing is lost.
 
-**When an agent step changes nothing.** If an agent run ends without a commit it usually says why (a phase that waits for a decision, a question, nothing left to do). That is no failure to retry: the dispatcher exits with code 3 and prints the agent's own words, and the orchestrator posts them as a question for the owner ("running it again would give the same answer"). The retry budget (two) counts failures since the last agent step that worked, not over the life of the issue. The planner may not write a phase that depends on an unanswered question or on later approval; such a thing goes under `## Deferred`, which is not counted as a phase. If the owner replies `/go` at the research-questions checkpoint without having commented, the orchestrator says so once and goes on at the second `/go`. (All four found on brevkoll#15: a phase titled "only if the human approves Q1" stopped the build, the agent's explanation was thrown away, and the retry budget was already used up by two earlier refusals.)
+**When an agent step changes nothing.** If an agent run ends without a commit it usually says why (a phase that waits for a decision, a question, nothing left to do). That is no failure to retry: the dispatcher exits with code 3 and prints the agent's own words, and the foreman posts them as a question for the owner ("running it again would give the same answer"). The retry budget (two) counts failures since the last agent step that worked, not over the life of the issue. The planner may not write a phase that depends on an unanswered question or on later approval; such a thing goes under `## Deferred`, which is not counted as a phase. If the owner replies `/go` at the research-questions checkpoint without having commented, the foreman says so once and goes on at the second `/go`. (All four found on brevkoll#15: a phase titled "only if the human approves Q1" stopped the build, the agent's explanation was thrown away, and the retry budget was already used up by two earlier refusals.)
 
 **Every comment links what you have to read.** A checkpoint ends with a "Files to check" list: the files that answer it (spec and holdout tests, threat model, research, plan and its decisions, validation report, the phone checklist), each linked on the branch and described in a few words, plus the pull request with every change. Only files that exist on the branch are linked. The agent-step comment lists the files that step changed (the issue's own `thoughts/` files first, at most 12) and the pull request. The list per checkpoint is `FILES_TO_CHECK` in `orchestrate.py`; add a row when a new gate needs a new file.
 
+**Staging has two links.** The staged build runs as two containers of the same image under the same sandbox policy: one on the tailnet address (phones and other devices), and a twin on `127.0.0.1` for a browser on the GPU workstation itself. The twin exists because a Windows host cannot reach the tailnet address of a WSL service it hosts: the request hangs, which looks like an endless spinner (found on brevkoll#15: the phone loaded the page, the PC hung). The twin is never bound to another interface (a test pins it), and `stage.py down` removes both. The review checkpoint shows both links.
+
 **Check the machine first.** `scripts/doctor.py` reports `ok`, `WARN` or `FAIL` with a fix hint for the loose files (modes, required keys, no copied secret), the model endpoint and its key, the tailnet address, Docker, the Gitea token, the mirror deny list and the timers. It never prints a value. Run it after any change to `~/.config/factory/` and before a long run. A secret is referenced, not copied: `LLM_API_KEY_FILE=<path>` in `staging.env` makes `stage.py` read the key from its source file.
 
-**Stopgap today.** While no shared client certificate exists, staging reaches the model on the devbox's loopback and the staged container shares the host network. That goes away with the mutual-TLS route and a bridge network.
+**Stopgap today.** While no shared client certificate exists, staging reaches the model on the staging machine's loopback and the staged container shares the host network (factory#28). That goes away with the mutual-TLS route and a bridge network.
 
-**Promotion (gate 6), not automated yet.** After the merge: tag, build, scan (trivy gate), SBOM, push to the Gitea registry, then a PR for the cluster. The manifests live in the app repo (`deploy/base`, `deploy/overlays/homelab`) and go through the app's own CI; the GitOps repo only gets a small ArgoCD Application. One replica, reachable from the tailnet only, a NetworkPolicy that allows egress to the model only, secrets from an ExternalSecret. I review and merge; the factory never touches the cluster.
+**Odd failures reach the phone.** A crashed tick, one issue failing inside a tick, a failed metrics or run-log push and a failed merge announcement or reminder each send a push through `alarm()` in `orchestrate.py`, at most once per kind every 6 hours. A crashed tick still exits non-zero for systemd. Tests cannot send a real push: `tests/conftest.py` refuses network calls.
+
+**A rework after a merge.** The review checkpoint (`after_gate4`) does not treat the item as merged while a pull request from the work branch is still open, even when an earlier PR from the same branch was merged (found on brevkoll#15: a `/rework` sent around the merge of PR #16 led the foreman to take PR #16 for the new PR #18, remove the staged build and post a false "Merged"). A notice never asks for the same command again, and names the checkpoint that is current.
+
+**Moving the foreman to the devbox.** The GPU workstation sleeps and goes off at night, and then nothing answers a command. `ops/devbox/` has the bootstrap, a cutover with automatic rollback and the model gateway for staged apps; `ops/devbox/README.md` lists the owner steps. On the devbox, staged builds listen on its LAB address (`STAGING_BIND_IP`) and are opened over the tailnet through the subnet router. Not cut over yet.
+
+**Promotion (gate 6), not automated yet** (factory#27). After the merge: tag, build, scan (trivy gate), SBOM, push to the Gitea registry, then a PR for the cluster. brevkoll v0.1.0 went as far as the scan and SBOM and ran as one local container; the registry push and the cluster are open, and brevkoll#19 prepares the app side (`deploy/base`, the model over mutual TLS). The manifests live in the app repo (`deploy/base`, `deploy/overlays/homelab`) and go through the app's own CI; the GitOps repo only gets a small ArgoCD Application. One replica, reachable from the tailnet only, a NetworkPolicy that allows egress to the model only, secrets from an ExternalSecret. I review and merge; the factory never touches the cluster.
 
 **Promotion checklist** (copy into the release issue): the staged build passed the acceptance list on a phone; no open `bug` issue marked blocking; the hardening items for the exposure chosen are merged; `docs/deploy.md` has a real Production and Rollback section; the model route for the cluster works from a pod (certificate, network policy).
 
 ---
+
+### 4b. Commands and model profiles
+
+Commands are owner comments on the work issue; the registry is `scripts/commands.py`.
+
+- `/go [minutes=N] [model=local|smart|fast|cheap]`: continue at the checkpoint. Free text on the same line or below is a note.
+- `/rework [model=...] <what is wrong>`: at the plan and review checkpoints only.
+- `/stop`.
+
+Options are strict: an unknown option (`agent=local`) or a bad value (`model=gpt5`, `minutes=ten`) is refused by name with a comment and a push, and nothing runs. A command that arrived while another one was running gets a "not acted on" notice instead of silence.
+
+Profiles: `smart` = Claude Opus, `fast` = Claude Sonnet, `cheap` = Claude Haiku, `local` = the local model on the GPU machine through `scripts/model_shim.py` (an Anthropic-compatible pass-through started for one step; no cloud credit used). No `model=` keeps the Claude account default. The foreman never switches models on its own: when the cloud limit is hit, the step is `blocked: credit_exhausted`, no retry is counted, and the checkpoint says to reply `/go model=local`. When the local model is down (loading, GPU busy, host off) the step is `blocked: model_unavailable`. The other classes are `blocked: auth` and `blocked: rate_limit` (`FAILURE_CLASSES` in `dispatch.py`, matched on the tail of a failed run); a failure that fits none of them is an ordinary failure and uses the retry budget. The local route is configured in the untracked `~/.config/factory/local-model.env` (`LOCAL_MODEL_URL`, `LOCAL_MODEL_NAME`, `LOCAL_MODEL_KEY_FILE`, optional `LOCAL_MODEL_TLS_CERT_FILE`, `LOCAL_MODEL_TLS_KEY_FILE`, `LOCAL_MODEL_TLS_CA_FILE`).
 
 ## 5. Phase 0: set up the factory (one evening, 2h cap)
 
@@ -715,14 +737,16 @@ I run it by hand at Gate 5 from Phase 1 on. Later, a Hermes job can run it when 
 
 ## 9. Deploy path on the homelab
 
+**Where it stands (2026-11-21).** brevkoll v0.1.0 was tagged, built on my machine, scanned with trivy (gate passed) and given an SBOM, then run as one sandboxed container on the workstation's loopback. It was not pushed to a registry and never reached the cluster. That container is gone now. The cluster path below is the target; brevkoll#19 makes the app ready for it.
+
 **Primary path (cluster up):**
 
-1. I tag `v*` on the merge commit. The image is built on my machine, scanned with trivy, and pushed to the Gitea container registry. There is no release workflow in CI.
-2. I open a PR in the GitOps repo that adds or bumps `apps/<app>/`. **Merging it is the deploy gate.**
-3. ArgoCD syncs to MicroK8s. External Secrets pulls secrets from Azure Key Vault. The cluster needs a pull secret for the registry.
-4. Cloudflare Tunnel exposes `<app>.aminrj.com`. For a private beta, put Cloudflare Access in front with the named user's email.
+1. I tag `v*` on the merge commit. CI runs the gates on the tag and on the merge commit on `main`. The image is built on my machine, scanned with trivy, and pushed to the Gitea container registry. There is no release workflow on Gitea. (brevkoll PR #21 proposes building and signing the cluster image on the public GitHub mirror instead; not merged.)
+2. The manifests live in the app repo (`deploy/base`, `deploy/overlays/homelab`). I open a PR in the GitOps repo that adds a small Argo CD Application for the app. **Merging it is the deploy gate.**
+3. Argo CD syncs to MicroK8s. External Secrets pulls secrets from Azure Key Vault. The cluster needs a pull secret for the registry.
+4. Exposure: reachable from the tailnet only, one replica, a NetworkPolicy that allows egress to the model only. A public URL (Cloudflare Tunnel at `<app>.aminrj.com`, Cloudflare Access in front with the named user's email) is a later, separate decision per app.
 
-**Fallback (cluster down):** run the same image as a single container (non-root, read-only filesystem, memory limit) behind the tunnel. Don't block app #1 on the cluster.
+**Fallback (cluster down):** run the same image as a single container (non-root, read-only filesystem, memory limit). Don't block an app on the cluster.
 
 Don't buy domains until an app has users. Subdomains of aminrj.com are free.
 
@@ -730,44 +754,46 @@ Don't buy domains until an app has users. Subdomains of aminrj.com are free.
 
 ## 10. Running one app through the factory
 
-A worked sequence for an S app (8h total):
+A worked sequence for an S app (8h total). I answer every checkpoint with a comment on the Gitea work issue, from the phone if I like: `/go minutes=N` (my minutes for that gate), `/rework <note>` at the plan and review checkpoints, `/stop`. The foreman does the rest within a minute.
 
-| Step | Action | Command or artifact | Budget |
+| Step | Who | What | Budget |
 |---|---|---|---|
-| 1 | File the idea, move it to `Spec ready` once Gate 1 is done | Issue form in `aminrj/factory` | 5 min |
-| 2 | Create the repo from the template, link it to the project | `gh repo create ... --template` | 5 min |
-| 3 | Write `spec.md`, then the holdout tests from the acceptance criteria, on branch `feat/<id>` | Me | 45 min |
-| 4 | Draft the threat model, then make every decision | `/threat-model <id>`, then I edit | 30 min |
-| 5 | Research | `/research <id>` | 10 min |
-| 6 | Plan, review it, set `Status: approved` | `/plan <id>` | 30 min |
-| 7 | Implement phase by phase, fresh session each time | `/implement <id> 1`, `/implement <id> 2`... | 3h |
-| 8 | Validate | `/validate <id>` | 10 min |
-| 9 | Push, open the PR, run the local review, read the full diff | `gh pr create`, `scripts/local-review.sh` | 45 min |
-| 10 | Merge, tag, deploy through the GitOps PR | `git tag v0.1.0` | 20 min |
-| 11 | Send the URL to the named user. Stage → `Shipped`, set `Shipped` and `Kill date` (+14 days) | Project | 5 min |
-| 12 | After 14 days: evaluate, then keep, iterate or kill | Retro line | 15 min |
+| 1 | Me | File the idea in `factory` (named user, size). A new app: `scripts/new_app.py <app> "<description>"`; a change to an existing app: `scripts/new_change.py <app> <title> --seed <dir>` (posts Checkpoint 1) | 10 min |
+| 2 | Me | Gate 1: write `spec.md` and the holdout tests on `agent/issue-<n>`, set `Status: approved` in my own commit, `/go` | 45 min |
+| 3 | Foreman, then me | `threat-model` step; I decide every row, push, `/go` | 30 min |
+| 4 | Foreman, then me | `research` step; I answer its questions in comments, `/go` | 10 min |
+| 5 | Foreman, then me | `plan` step; I approve (`Status: approved` in my commit), edit, or `/rework` | 30 min |
+| 6 | Foreman | `implement` once per phase, CI between phases, one rework run on red CI; timebox warning at 80 % | 3h of agent time |
+| 7 | Foreman | `validate` step, then stages the PR head and posts the review checkpoint with the links and `acceptance.md` | |
+| 8 | Me | Try the staged build on the phone, read the diff, merge on Gitea (or `/rework`), then `/go minutes=N`: the foreman pushes `main` to the mirror and removes the staged build | 45 min |
+| 9 | Me, by hand for now | Release and deploy (section 9), send the link to the named user, label `stage/shipped` | 20 min |
+| 10 | Timer | Lookback reviews at 14 and 30 days after `stage/shipped` (`scripts/lookback.py`); I keep, iterate or kill | 15 min |
 
-Remaining buffer: about 1.5h. If I reach the timebox at step 9, I ship what passes the gates. Unfinished phases become a v0.2 issue.
+Remaining buffer: about 1.5h. If I reach the timebox before step 8, I ship what passes the gates. Unfinished phases become a v0.2 issue.
 
 ---
 
 ## 11. Evaluation and metrics
 
-### Per app (project fields)
+### Per app (in the idea issue and the retro)
 
 - Hours spent vs timebox
-- Lead time: issue created → `Shipped`
+- Lead time: issue created → `stage/shipped`
 - Real users at 14 days, and whether the named user still uses it
 - Decision: keep, iterate, kill
 
 ### Per factory (the talk data)
 
+`scripts/collect_metrics.py` computes these from Gitea (repos with topic `factory-app`) and writes them to `data/SUMMARY.md`:
+
 | Metric | How I get it |
 |---|---|
-| Human minutes per gate | PR template table, summed per app |
+| Human minutes per gate | `/go minutes=N` at each checkpoint (`data/human_minutes.jsonl`), plus the PR template table |
+| Time a checkpoint waits for me | `data/gate_waits.jsonl` |
+| Agent minutes and cost | `data/agent_runs.jsonl`, written by `dispatch.py` |
 | Agent first-pass holdout rate | PR checkbox |
-| Rework rate | `gh pr list -R aminrj/<app> --state merged --label rework --json number --jq length`, divided by all merged PRs |
-| Escaped bugs | `gh issue list -R aminrj/<app> --label escaped-bug --state all --json number --jq length` |
+| Rework rate | merged PRs with the `rework` label, divided by all merged PRs |
+| Escaped bugs | issues labelled `escaped-bug` |
 | Security findings caught per gate | Count of CI security failures, review FAILs, and threat-model controls added |
 | Weakened-check attempts | Local review FAILs on rule 1, plus guard script hits |
 
@@ -789,12 +815,12 @@ Remaining buffer: about 1.5h. If I reach the timebox at step 9, I ship what pass
 
 ### Phase 1: app #1 (this weekend)
 
-- [ ] App for a person in my house, size S
-- [ ] Every gate run by hand, minutes logged
-- [ ] Shipped on a public URL by Sunday night
-- [ ] Friction log with the top 3 items
+- [x] App for a person in my house, size S (brevkoll)
+- [x] Every gate run, minutes logged (by hand on brevkoll#1, then through the foreman)
+- [ ] Shipped on a URL the named user can open (v0.1.0 ran only on the workstation's loopback)
+- [x] Friction log with the top 3 items (`friction` issues in `factory`, retro `retros/2026-W47-brevkoll-v1.md`)
 
-**Exit criteria:** the named user has used it once.
+**Exit criteria:** the named user has used it once. Not met yet.
 
 ### Phase 2: apps #2 and #3 (next 4 to 6 weeks)
 
@@ -858,7 +884,7 @@ Remaining buffer: about 1.5h. If I reach the timebox at step 9, I ship what pass
 
 ## 15. Agent pipeline (dispatched locally)
 
-Agents run on my machine through `scripts/dispatch.py <repo> <issue> <step>`. The labels `agent:<step>` mark intent and are removed when a step finishes. Nothing in CI runs an agent.
+Agents run on my machine through `scripts/dispatch.py <repo> <issue> <step>`. The foreman calls it when I answer a checkpoint; I run it by hand only to repair something. The labels `agent:<step>` mark intent and are removed when a step finishes. Nothing in CI runs an agent.
 
 | Step | Agent does | Then I |
 |---|---|---|
@@ -875,7 +901,9 @@ The dispatcher:
 - refuses `implement` unless the plan says `Status: approved` in a commit I made, and refuses any step whose gate is open (spec missing, `PROPOSED` rows left);
 - refuses to push if an agent commit touches `tests/holdout/`, `.gitea/workflows/`, `.claude/settings.json`, `scripts/check-*` or the spec, if the agent wrote `Status: approved`, or if the guard script (taken from `origin/main`) fails;
 - pushes, opens a `WIP:` PR if there is none, comments on the issue, removes the label;
-- logs duration and cost to `data/agent_runs.jsonl`.
+- logs duration and cost to `data/agent_runs.jsonl`;
+- exits with code 3 when the agent declined to change anything and said why (the foreman posts that as a question, no retry);
+- runs `claude -p` with the profile from `/go model=...` (section 4b) and classifies a failed run (`blocked: <class>`).
 
 Security properties: the agent never has the Gitea token or a push command; issue text is copied as marked data and only my own comments are included; `.claude/settings.json` denies reads of the holdout tests and secrets. These are tripwires. The boundary is branch protection plus my review.
 
@@ -896,10 +924,16 @@ Full spec in [`hermes/factory-profile.md`](hermes/factory-profile.md). Summary: 
 
 ## 18. Data I collect
 
-`scripts/collect_metrics.py` runs every Sunday (`.gitea/workflows/collect-metrics.yml`) across every public repo with topic `factory-app` and writes:
+`scripts/collect_metrics.py` runs at every checkpoint (the foreman calls it and commits `BOARD.md` and `data/` to Gitea as `factory-orchestrator`) across every Gitea repo with topic `factory-app`. It writes:
 
 - `data/prs.jsonl`: one record per merged PR: lead time, size, agent branch or not, rework label, first-pass holdout checkbox, human minutes per gate.
 - `data/weekly.jsonl`: one snapshot per ISO week.
-- `data/SUMMARY.md`: the public tables.
+- `data/SUMMARY.md`: the public tables. `BOARD.md`: the board.
+
+Written by other parts of the factory (formats in `docs/data-contracts.md` where listed):
+
+- `data/agent_runs.jsonl` (`dispatch.py`), `data/human_minutes.jsonl` and `data/gate_waits.jsonl` (the foreman).
+- `data/health.jsonl` (`nightly_health.py`, 02:30), `data/lookbacks.jsonl` (`lookback.py`, 03:00), `data/rework.jsonl` (`rework_digest.py`, Sundays 17:30). The timers are in `ops/systemd/`, installed with `ops/install-timers.sh`.
+- `data/runs.jsonl` (written by hand, one line per manual check of a built app) and `data/bench.jsonl`.
 
 The data is only as good as the PR template. **Filling in the minutes table before merging is part of Gate 5.**

@@ -97,7 +97,7 @@ def create_app(g: Gitea, app: str, desc: str, seed: Path | None, work_title: str
 
 def ensure_wip_pr(g: Gitea, repo: str, branch: str, n: int, title: str) -> dict:
     """The work item gets its PR at Gate 1, so CI runs on the holdout tests and the owner has one place to look.
-    dispatch.py reuses it and the orchestrator removes `WIP:` at the review checkpoint."""
+    dispatch.py reuses it and the foreman removes `WIP:` at the review checkpoint."""
     pr = next((p for p in g.get(f"/repos/{repo}/pulls?state=open") if p["head"]["ref"] == branch), None)
     return pr or g.call("POST", f"/repos/{repo}/pulls", {"head": branch, "base": "main", "title": f"WIP: {title}",
                                                           "body": f"Refs #{n}\n\nGate 1 draft. Nothing to merge yet."})

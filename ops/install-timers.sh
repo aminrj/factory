@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the factory timers as systemd USER units: the orchestrator tick and the three quality timers. They need claude and
+# Install the factory timers as systemd USER units: the foreman tick and the three quality timers. They need claude and
 # git credentials, so they run here, not on the CI runner. The units live in this folder (the factory repo is the one home
 # of the code and of the units) and are linked from here; they run %h/git/software-factory/factory, the runtime clone. Run
 # only after the branch is merged and that clone is updated. Usage: ops/install-timers.sh [--uninstall]

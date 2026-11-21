@@ -33,12 +33,12 @@ class CrashTests(unittest.TestCase):
     orchestrate_state = gates.GateTests.orchestrate_state
     AGENT = gates.GateTests.AGENT
 
-    def fake_dispatch(self, ctx: orchestrate.Ctx, step: str, note: str | None = None) -> str:
+    def fake_dispatch(self, ctx: orchestrate.Ctx, step: str, note: str | None = None, note_kind: str = "ci") -> str:
         if getattr(self, "to_raise", None):
             raise self.to_raise.pop(0)
         if getattr(self, "on_dispatch", None):
             self.on_dispatch(step)
-        return gates.GateTests.fake_dispatch(self, ctx, step, note)
+        return gates.GateTests.fake_dispatch(self, ctx, step, note, note_kind)
 
     def die_during(self, text: str = "/go minutes=2") -> None:
         """Run one /go in which the process dies, then let the 'OS' release its lock."""
@@ -117,6 +117,15 @@ class CrashTests(unittest.TestCase):
         self.assertIn("deep teal accent", self.dispatched[-1][1] or "")  # the retry still has what the owner typed
         self.assertNotIn("rework_note", self.orchestrate_state())  # and forgets it once the plan is back
 
+    def test_an_item_with_a_live_process_is_running_not_stuck(self) -> None:
+        orchestrate.STATE.mkdir(exist_ok=True)
+        self.assertFalse(orchestrate.item_is_running("app", 1))  # no lock file yet
+        held = self.lock_path().open("w")
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self.assertTrue(orchestrate.item_is_running("app", 1))
+        held.close()
+        self.assertFalse(orchestrate.item_is_running("app", 1))  # the process ended: the lock is free again
+
     def test_two_ticks_never_run_the_same_item_at_once(self) -> None:
         self.checkpoint("after_gate2", "2")
         self.g.comment("owner/app", 1, "/go")
@@ -126,6 +135,43 @@ class CrashTests(unittest.TestCase):
         self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "busy")  # type: ignore[arg-type]
         self.assertEqual(self.dispatched, [])
         held.close()
+
+    # -- a retry resumes after the step that already worked
+    def rework_at_the_review_checkpoint(self, note: str) -> str:
+        self.commit_file("plan.md", PLAN.replace("draft", "approved"), email=gates.WEB_EDITOR)
+        self.checkpoint("after_gate4", "4", extra=";rework=ok")
+        return self.go(f"/rework {note}")
+
+    def test_a_validate_that_fails_after_the_rework_does_not_repeat_the_implement_step(self) -> None:
+        failures = [orchestrate.StepFailed("`validate` failed: usage limit")]
+
+        def validate_fails_once(step: str) -> None:
+            if step == "validate" and failures:
+                raise failures.pop()
+
+        self.on_dispatch = validate_fails_once
+        self.assertEqual(self.rework_at_the_review_checkpoint("make it warmer"), "failed")
+        self.assertEqual(self.steps(), ["implement"])  # the stub raised before validate was recorded
+        self.assertEqual(self.go("/go"), "ran after_staging_rework")
+        self.assertEqual(self.steps().count("implement"), 1)  # not run again
+        self.assertEqual(self.steps().count("validate"), 1)
+        self.assertIn("CHECKPOINT 4", self.bot())
+        self.assertFalse(self.orchestrate_state()["rework_implemented"])  # finished: the next rework starts clean
+
+    def test_a_stale_flag_never_swallows_a_new_rework_request(self) -> None:
+        import json
+
+        orchestrate.STATE.mkdir(exist_ok=True)
+        (orchestrate.STATE / "app-1.json").write_text(json.dumps({"rework_implemented": True}))  # left over from before
+        self.assertEqual(self.rework_at_the_review_checkpoint("a new request"), "ran after_staging_rework")
+        self.assertEqual(self.steps(), ["implement", "validate"])  # implement did run for the new request
+
+    def test_a_new_rework_request_runs_the_implement_step_again(self) -> None:
+        self.assertEqual(self.rework_at_the_review_checkpoint("first"), "ran after_staging_rework")
+        self.assertEqual(self.steps(), ["implement", "validate"])
+        self.g.comment("owner/app", 1, "/rework second")
+        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran after_staging_rework")  # type: ignore[arg-type]
+        self.assertEqual(self.steps(), ["implement", "validate", "implement", "validate"])
 
     # -- /stop is heard during a build
     def test_stop_written_during_a_phase_ends_the_build_before_the_next_one(self) -> None:

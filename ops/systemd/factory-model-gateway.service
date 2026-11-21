@@ -1,0 +1,11 @@
+[Unit]
+Description=Model gateway for staged apps: loopback HTTP in, key and client certificate added, the local model out
+# Only on a host that reaches the model over the mutual-TLS route (the devbox). Config: ~/.config/factory/local-model.env
+
+[Service]
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/model_shim.py serve --port 8090
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

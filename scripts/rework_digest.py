@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Weekly digest of merged pull requests labelled `rework`, with their "Friction" sections.
 
-Appends one line per PR (once) to data/rework.jsonl. The orchestrator and I read it when writing the weekly retro:
+Appends one line per PR (once) to data/rework.jsonl. The foreman and I read it when writing the weekly retro:
 for every rework PR, which rule or check would have prevented it, and where that now lives.
 
 Usage: rework_digest.py [--repo NAME] [--since-days 14] [--dry-run]

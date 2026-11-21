@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -17,6 +19,24 @@ from typing import Any
 
 TOKEN_FILE = Path(os.environ.get("GITEA_TOKEN_FILE", Path.home() / ".config/git/gitea-token"))
 GITHUB_OWNER = os.environ.get("GITHUB_OWNER", "aminrj")
+
+
+GITHUB_HOSTS = ("https://github.com", "https://gist.github.com")  # gh registers these helpers too (the devbox)
+
+
+def url_from_credential_config(config: str) -> str | None:
+    """The Gitea URL from `git config --get-regexp credential.*.helper` output: the helper that reads the token file,
+    else the first https one that is not GitHub. On the devbox `gh auth setup-git` lists github.com first."""
+    urls: list[tuple[str, str]] = []
+    for line in config.splitlines():
+        key, _, value = line.partition(" ")  # credential.<url>.helper <command>
+        url = key[len("credential."):-len(".helper")].rstrip("/")
+        if url.startswith("https://") and url not in GITHUB_HOSTS:
+            urls.append((url, value))
+    for url, value in urls:
+        if TOKEN_FILE.name in value:
+            return url
+    return urls[0][0] if urls else None
 
 
 def _server_url() -> str:
@@ -27,11 +47,9 @@ def _server_url() -> str:
         ["git", "config", "--global", "--get-regexp", r"^credential\..*\.helper$"],
         capture_output=True, text=True, check=False,
     ).stdout
-    for line in out.splitlines():
-        key = line.split()[0]  # credential.<url>.helper
-        url = key[len("credential."):-len(".helper")]
-        if url.startswith("https://"):
-            return url.rstrip("/")
+    found = url_from_credential_config(out)
+    if found:
+        return found
     raise SystemExit("Set GITEA_URL (no Gitea URL found in the git credential config).")
 
 
@@ -43,6 +61,17 @@ def is_owner_email(email: str, login: str, configured_email: str) -> bool:
 
 class GiteaError(RuntimeError):
     pass
+
+
+class Unreachable(GiteaError):
+    """The server did not answer in time, even after retries. Not a bad request: the network path is down or stalled."""
+
+
+TIMEOUT = float(os.environ.get("GITEA_TIMEOUT", "15"))  # seconds per request; a healthy answer takes well under one
+READ_TRIES = 3  # reads only: a write that timed out may have happened, so it is never repeated here
+BACKOFF = (1.0, 3.0)
+PAGE_SIZE = 50
+MAX_PAGES = 100  # 5000 items; a loop that long is a bug, not data
 
 
 class Gitea:
@@ -58,13 +87,21 @@ class Gitea:
             f"{self.base}/api/v1{path}", data=data, method=method,
             headers={"Authorization": f"token {self._token}", "Content-Type": "application/json"},
         )
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
-                raw = resp.read()
-                status = resp.status
-        except urllib.error.HTTPError as err:
-            raw = err.read()
-            status = err.code
+        tries = READ_TRIES if method == "GET" else 1
+        for attempt in range(tries):
+            try:
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # noqa: S310
+                    raw = resp.read()
+                    status = resp.status
+                break
+            except urllib.error.HTTPError as err:
+                raw = err.read()
+                status = err.code
+                break
+            except (urllib.error.URLError, socket.timeout, ConnectionError) as err:
+                if attempt + 1 == tries:
+                    raise Unreachable(f"{method} {path}: no answer after {tries} try(ies): {type(err).__name__}") from err
+                time.sleep(BACKOFF[min(attempt, len(BACKOFF) - 1)])
         if status not in ok:
             raise GiteaError(f"{method} {path} -> {status}: {raw[:300].decode(errors='replace')}")
         if text:
@@ -82,17 +119,22 @@ class Gitea:
             return False
 
     def paged(self, path: str) -> list[Any]:
+        """All items of a list endpoint. Some endpoints (an issue's comments) ignore `page` and `limit` and return
+        everything every time, so a page with nothing new in it ends the loop; so does a short page and a hard cap.
+        Without that, an issue with 50 or more comments made this loop forever (2026-11-21)."""
         sep = "&" if "?" in path else "?"
         items: list[Any] = []
-        page = 1
-        while True:
-            chunk = self.get(f"{path}{sep}limit=50&page={page}")
+        seen: set[Any] = set()
+        for page in range(1, MAX_PAGES + 1):
+            chunk = self.get(f"{path}{sep}limit={PAGE_SIZE}&page={page}")
             if isinstance(chunk, dict):  # search endpoints wrap results
                 chunk = chunk.get("data", [])
-            items += chunk
-            if len(chunk) < 50:
-                return items
-            page += 1
+            new = [x for x in chunk if not (isinstance(x, dict) and x.get("id") in seen)]
+            seen.update(x["id"] for x in new if isinstance(x, dict) and "id" in x)
+            items += new
+            if len(chunk) < PAGE_SIZE or not new:
+                break
+        return items
 
     def repo_url(self, repo: str) -> str:
         return f"{self.base}/{repo}.git"

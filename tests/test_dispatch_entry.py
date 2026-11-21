@@ -175,3 +175,27 @@ class PlanRevisionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SnapshotTests(unittest.TestCase):
+    def test_the_foremans_notices_never_reach_the_snapshot(self) -> None:
+        # a staging notice with a machine name was copied into thoughts/15/issue.md and blocked the mirror push
+        import tempfile
+
+        class G:
+            user = "owner"
+
+            def get(self, path: str) -> object:
+                if path.endswith("/comments"):
+                    return [{"user": {"login": "owner"}, "created_at": "t", "body": b} for b in
+                            ("ℹ️ The staged build runs on http://box.internal:8800/", "▶ Picked up", "please fix the date")]
+                return {"title": "x", "body": "the issue"}
+
+        with tempfile.TemporaryDirectory() as d:
+            wt = Path(d)
+            (wt / "thoughts" / "1").mkdir(parents=True)
+            dispatch.write_issue_snapshot(G(), "o/r", 1, wt)  # type: ignore[arg-type]
+            text = (wt / "thoughts" / "1" / "issue.md").read_text()
+        self.assertIn("please fix the date", text)
+        self.assertNotIn("box.internal", text)
+        self.assertNotIn("Picked up", text)

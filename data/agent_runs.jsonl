@@ -20,3 +20,11 @@
 {"ts": "2026-11-21T07:48:15Z", "repo": "brevkoll", "issue": 15, "step": "implement", "duration_s": 9.0, "cost_usd": 0.0796148, "turns": 3, "is_error": false, "fallback": false}
 {"ts": "2026-11-21T07:56:48Z", "repo": "brevkoll", "issue": 15, "step": "implement", "duration_s": 55.1, "cost_usd": 0.2461085, "turns": 28, "is_error": false, "fallback": false}
 {"ts": "2026-11-21T07:58:37Z", "repo": "brevkoll", "issue": 15, "step": "validate", "duration_s": 47.1, "cost_usd": 0.21792879999999998, "turns": 24, "is_error": false, "fallback": false}
+{"ts": "2026-11-21T08:09:53Z", "repo": "brevkoll", "issue": 15, "step": "implement", "duration_s": 60.9, "cost_usd": 0.2235454, "turns": 17, "is_error": false, "fallback": false}
+{"ts": "2026-11-21T08:11:18Z", "repo": "brevkoll", "issue": 15, "step": "validate", "duration_s": 21.9, "cost_usd": 0.1439857, "turns": 15, "is_error": true, "fallback": false}
+{"ts": "2026-11-21T08:12:24Z", "repo": "brevkoll", "issue": 15, "step": "implement", "duration_s": 1.4, "cost_usd": 0, "turns": 1, "is_error": true, "fallback": false}
+{"ts": "2026-11-21T12:15:56Z", "repo": "brevkoll", "issue": 15, "step": "implement", "duration_s": 43.3, "cost_usd": 0.1547351, "turns": 15, "is_error": false, "fallback": false}
+{"ts": "2026-11-21T12:17:44Z", "repo": "brevkoll", "issue": 15, "step": "validate", "duration_s": 46.5, "cost_usd": 0.206707, "turns": 17, "is_error": false, "fallback": false}
+{"ts": "2026-11-21T14:12:43Z", "repo": "brevkoll", "issue": 19, "step": "threat-model", "duration_s": 109.6, "cost_usd": 0.5033768000000001, "turns": 8, "is_error": false, "fallback": false, "model": "default"}
+{"ts": "2026-11-21T15:10:36Z", "repo": "brevkoll", "issue": 19, "step": "research", "duration_s": 153.1, "cost_usd": 0.9522058000000002, "turns": 45, "is_error": false, "fallback": false, "model": "default"}
+{"ts": "2026-11-21T15:21:47Z", "repo": "brevkoll", "issue": 19, "step": "plan", "duration_s": 278.1, "cost_usd": 1.3618542, "turns": 26, "is_error": false, "fallback": false, "model": "default"}

@@ -70,8 +70,8 @@ def check_model(app: str | None) -> None:
 
 def check_machine() -> None:
     try:
-        stage.tailnet_ip()
-        say("ok", "tailnet address present")
+        ip = stage.bind_ip(stage.read_env(stage.CONF / "staging.env"))
+        say("ok", f"staged builds listen on {ip}")
     except stage.StageError as e:
         say("FAIL", str(e))
     res = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True, check=False)
@@ -110,7 +110,7 @@ fi
 if [ "$3" = "1" ] && [ "$(git rev-parse --show-toplevel)" = "{runtime}" ]; then
   b=$(git rev-parse --abbrev-ref HEAD)
   if [ "$b" != "main" ]; then
-    echo "WARNING: you switched the factory runtime to '$b'. The timers now run that code and the orchestrator pauses." >&2
+    echo "WARNING: you switched the factory runtime to '$b'. The timers now run that code and the foreman pauses." >&2
     echo "Switch back: git switch main. Work in a worktree: git worktree add ../worktrees/factory-<topic> -b <branch> origin/main" >&2
   fi
 fi

@@ -7,3 +7,8 @@
 {"ts": "2026-11-20T20:00:29+01:00", "repo": "brevkoll", "issue": 1, "gate": "code_review", "minutes": 1, "comment_id": 251}
 {"ts": "2026-11-21T07:59:12+01:00", "repo": "brevkoll", "issue": 15, "gate": "threat_model", "minutes": 10, "comment_id": 420}
 {"ts": "2026-11-21T08:55:52+01:00", "repo": "brevkoll", "issue": 15, "gate": "plan_review", "minutes": 5, "comment_id": 489}
+{"ts": "2026-11-21T14:13:02+01:00", "repo": "brevkoll", "issue": 15, "gate": "code_review", "minutes": 19, "comment_id": 584}
+{"ts": "2026-11-21T14:14:12+01:00", "repo": "brevkoll", "issue": 15, "gate": "code_review", "minutes": 21, "comment_id": 587}
+{"ts": "2026-11-21T15:10:53+01:00", "repo": "brevkoll", "issue": 19, "gate": "spec", "minutes": 8, "comment_id": 618}
+{"ts": "2026-11-21T16:08:03+01:00", "repo": "brevkoll", "issue": 19, "gate": "threat_model", "minutes": 99, "comment_id": 630}
+{"ts": "2026-11-21T16:17:08+01:00", "repo": "brevkoll", "issue": 19, "gate": "plan_review", "minutes": 10, "comment_id": 642}

@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the factory orchestrator tick every minute
+Description=Run the foreman tick every minute
 
 [Timer]
 OnBootSec=1min

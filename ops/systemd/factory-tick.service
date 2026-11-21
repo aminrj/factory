@@ -1,5 +1,5 @@
 [Unit]
-Description=Factory orchestrator tick (acts on a new /go or /stop in a work issue)
+Description=Foreman tick (acts on a new /go or /stop in a work issue)
 
 [Service]
 Type=oneshot

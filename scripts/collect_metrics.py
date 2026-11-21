@@ -96,7 +96,7 @@ def write_board(g: Gitea) -> None:
                 rows[stage].append(f"| {issue['title']} | {name}#{issue['number']} |")
     lines = ["# Board", "", f"_Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')} by `scripts/collect_metrics.py`._", ""]
     try:
-        import orchestrate  # the same list the orchestrator uses for its reminders
+        import orchestrate  # the same list the foreman uses for its reminders
 
         waiting = orchestrate.waiting_list(g)
     except Exception:  # noqa: BLE001 - the board must still be written

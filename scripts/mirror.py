@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""The only way to push to a public GitHub mirror. Refuses when the commits to be pushed add internal names.
+"""The only way to push to a public GitHub mirror. Publishes a snapshot of `main` and refuses when its files hold
+internal names.
 
 Usage:
-  mirror.py check <repo> [--all]   scan the lines the next push would add (or every tracked file with --all)
-  mirror.py push  <repo>           check, then `git push github main`
+  mirror.py check <repo>   scan every tracked file of `main` (what the next push would publish)
+  mirror.py push  <repo>   check, then push one snapshot commit to `github main`
+
+Snapshots, not history: the mirror gets one new commit per push, whose tree is `main`'s tree and whose parent is the
+mirror's previous commit. The private history stays on Gitea. So a name that once reached a commit and was removed
+later blocks nothing: the published files are what is checked, and fixing a file in a new commit unblocks the push.
+(Pushing history made that impossible: brevkoll and factory were stuck 37 commits behind on 2026-11-21.)
 
 What counts as internal (the repos are private on Gitea and only `main` is mirrored read-only):
   - private and tailnet IPv4 ranges (10/8, 172.16/12, 192.168/16, 100.64/10), except in tests/ fixtures
@@ -45,55 +51,75 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=check, capture_output=True, text=True).stdout
 
 
-def added_lines(repo: Path, whole_tree: bool) -> list[tuple[str, int, str]]:
-    """(path, line number, text) for every line the next push adds. Falls back to the whole tree for a new mirror."""
-    has_base = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/remotes/github/main"], cwd=repo,
-                              capture_output=True).returncode == 0
-    if whole_tree or not has_base:
-        rows = []
-        for path in git(repo, "ls-files", "-z").split("\0"):
-            f = repo / path
-            if not path or not f.is_file() or f.stat().st_size > 2_000_000:
-                continue
-            try:
-                rows += [(path, n, t) for n, t in enumerate(f.read_text().splitlines(), 1)]
-            except (UnicodeDecodeError, OSError):
-                continue
-        return rows
-    diff = git(repo, "diff", "--unified=0", "--no-color", "github/main...HEAD")
-    rows, path, line = [], "", 0
-    for raw in diff.splitlines():
-        if raw.startswith("+++ b/"):
-            path = raw[6:]
-        elif m := re.match(r"@@ -\S+ \+(\d+)", raw):
-            line = int(m.group(1))
-        elif raw.startswith("+") and not raw.startswith("+++"):
-            rows.append((path, line, raw[1:]))
-            line += 1
+MIRROR_IDENTITY = {"GIT_AUTHOR_NAME": "factory-orchestrator", "GIT_AUTHOR_EMAIL": "factory-orchestrator@users.noreply.local",
+                   "GIT_COMMITTER_NAME": "factory-orchestrator",
+                   "GIT_COMMITTER_EMAIL": "factory-orchestrator@users.noreply.local"}
+MIRROR_REF = "refs/remotes/github/main"
+
+
+def tree_lines(repo: Path, rev: str = "main") -> list[tuple[str, int, str]]:
+    """(path, line number, text) for every text line of every tracked file at `rev`: exactly what a snapshot publishes."""
+    paths = [p for p in git(repo, "ls-tree", "-r", "-z", "--name-only", rev).split("\0") if p]
+    batch = "".join(f"{rev}:{p}\n" for p in paths)
+    out = subprocess.run(["git", "cat-file", "--batch"], cwd=repo, input=batch.encode(), capture_output=True,
+                         check=True).stdout
+    rows: list[tuple[str, int, str]] = []
+    pos = 0
+    for path in paths:
+        header_end = out.index(b"\n", pos)
+        size = int(out[pos:header_end].split()[2])
+        blob = out[header_end + 1:header_end + 1 + size]
+        pos = header_end + 1 + size + 1
+        if size > 2_000_000 or b"\0" in blob[:8000]:
+            continue  # large or binary
+        try:
+            rows += [(path, n, t) for n, t in enumerate(blob.decode().splitlines(), 1)]
+        except UnicodeDecodeError:
+            continue
     return rows
+
+
+def snapshot(repo: Path, branch: str = "main") -> str | None:
+    """The commit to push: `branch`'s tree on top of the mirror's last commit. None when the mirror has that tree."""
+    tree = git(repo, "rev-parse", f"{branch}^{{tree}}").strip()
+    parent = git(repo, "rev-parse", "--verify", "-q", MIRROR_REF, check=False).strip()
+    if parent and git(repo, "rev-parse", f"{parent}^{{tree}}").strip() == tree:
+        return None
+    source = git(repo, "rev-parse", branch).strip()
+    subject = git(repo, "log", "-1", "--format=%s", branch).strip()
+    message = f"Mirror of {source[:12]}: {subject}\n\nA snapshot of main on the private server; its history stays there."
+    args = ["commit-tree", tree, "-m", message, *(["-p", parent] if parent else [])]
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True,
+                          env={**os.environ, **MIRROR_IDENTITY}).stdout.strip()
 
 
 TEST_PATH = re.compile(r"(^|/)tests?/")
 SELF = re.compile(r"(^|/)(mirror\.py|test_mirror\.py)$")  # the guard describes the patterns it blocks
 
 
-def check(repo: Path, whole_tree: bool = False) -> list[str]:
+def check(repo: Path, rev: str = "main") -> list[str]:
     """Test fixtures may use private IPs (rate-limit tests); every other rule applies everywhere."""
     pats = rules()
-    return [f"{p}:{n}  ({name})" for p, n, text in added_lines(repo, whole_tree)
+    return [f"{p}:{n}  ({name})" for p, n, text in tree_lines(repo, rev)
             for name, rx in pats.items()
             if rx.search(text) and not SELF.search(p) and not (name == "private-ip" and TEST_PATH.search(p))]
 
 
-def push(repo: Path, branch: str = "main") -> None:
+def push(repo: Path, branch: str = "main") -> str:
+    """Publish `branch` as one snapshot commit. Returns what happened, for the caller's log."""
     if repo.name == "factory-ops":
         raise SystemExit("REFUSED: factory-ops is private and is never mirrored.")
     subprocess.run(["git", "fetch", "-q", "github"], cwd=repo, check=False, capture_output=True)
-    hits = check(repo)
+    hits = check(repo, branch)
     if hits:
-        raise SystemExit("REFUSED: the push would publish internal names. Fix them in a new commit, then retry:\n  "
+        raise SystemExit("REFUSED: the files on main hold internal names. Fix them in a new commit, then retry:\n  "
                          + "\n  ".join(hits))
-    subprocess.run(["git", "push", "-q", "github", branch], cwd=repo, check=True)
+    commit = snapshot(repo, branch)
+    if commit is None:
+        return "the mirror already has this tree"
+    subprocess.run(["git", "push", "-q", "github", f"{commit}:refs/heads/main"], cwd=repo, check=True)
+    subprocess.run(["git", "update-ref", MIRROR_REF, commit], cwd=repo, check=True)
+    return f"pushed snapshot {commit[:12]}"
 
 
 def main(argv: list[str]) -> int:
@@ -102,10 +128,9 @@ def main(argv: list[str]) -> int:
         return 2
     repo = Path(argv[2]).resolve()
     if argv[1] == "push":
-        push(repo)
-        print(f"pushed {repo.name} main to github")
+        print(f"{repo.name}: {push(repo)}")
         return 0
-    hits = check(repo, "--all" in argv)
+    hits = check(repo)
     print("\n".join(hits) if hits else "clean")
     return 1 if hits else 0
 

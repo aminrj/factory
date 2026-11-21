@@ -33,10 +33,11 @@ class GateFakeGitea(FakeGitea):
         self.closed_prs: list[dict] = []
         self.patched: list[dict] = []
         self.posted_labels = 0
+        self.open_prs = [PR]
 
     def get(self, path: str) -> list[dict]:
         if "/pulls?state=open" in path:
-            return [PR]
+            return self.open_prs
         if "/pulls?state=closed" in path:
             return self.closed_prs
         return super().get(path)
@@ -71,6 +72,7 @@ class GateTests(unittest.TestCase):
         self.t = self.clone / "thoughts" / "1"
         self.g = GateFakeGitea()
         self.dispatched: list[tuple[str, str | None]] = []
+        self.calls: list[dict] = []
         self.agent_files: dict[str, str] = {}
         self.ci: list[dict] = []
         self.stage_down = mock.Mock()
@@ -104,8 +106,9 @@ class GateTests(unittest.TestCase):
         git(self.clone, "commit", "-q", "-m", f"write {rel}", email=email)
         git(self.clone, "push", "-q", "origin", "agent/issue-1")
 
-    def fake_dispatch(self, ctx: orchestrate.Ctx, step: str, note: str | None = None) -> str:
+    def fake_dispatch(self, ctx: orchestrate.Ctx, step: str, note: str | None = None, note_kind: str = "ci") -> str:
         self.dispatched.append((step, note))
+        self.calls.append({"step": step, "note_kind": note_kind, "model": ctx.model})
         if step in self.agent_files:  # what the agent step would have written
             self.commit_file({"research": "research.md", "plan": "plan.md", "threat-model": "threat-model.md"}.get(step, "x.md"),
                               self.agent_files[step])
@@ -311,6 +314,100 @@ class GateTests(unittest.TestCase):
         self.assertIn("only works at the plan checkpoint and the review checkpoint", self.bot())
         self.assertEqual(self.dispatched, [])
 
+    def test_a_refused_rework_does_not_hide_the_next_go(self) -> None:
+        # the refusal used to be a ▶ claim: it became the pivot and every later /go was ignored in silence
+        self.checkpoint("after_gate2", "2")
+        self.go("/rework nope")
+        self.assertTrue(self.bot().startswith(orchestrate.NOTICE_PREFIX))
+        self.assertIsNone(orchestrate.decide(self.g, "owner/app", 1))  # type: ignore[arg-type]  # answered, not redone
+        self.g.comment("owner/app", 1, "/go")
+        d = orchestrate.decide(self.g, "owner/app", 1)  # type: ignore[arg-type]
+        self.assertEqual((d or [None] * 3)[2], "go")
+
+    # -- model profiles and strict options (2026-11-21: `/go agent=local` was read as a note, in silence)
+    def test_go_with_a_model_runs_every_step_on_that_model(self) -> None:
+        self.commit_file("plan.md", PLAN.replace("draft", "approved"), email=WEB_EDITOR)
+        self.checkpoint("after_gate4", "4", extra="")
+        self.g.comments[-1]["body"] = self.g.comments[-1]["body"].replace(";stop=", ";stop=;rework=ok")
+        self.assertEqual(self.go("/rework model=local the .ics has the wrong year"), "ran after_staging_rework")
+        self.assertEqual({c["model"] for c in self.calls}, {"local"})
+        self.assertIn("model `local`", next(c["body"] for c in self.g.comments if c["body"].startswith("▶ Picked up")))
+        self.assertIn("wrong year", self.dispatched[0][1] or "")
+        self.assertNotIn("model=local", self.dispatched[0][1] or "")
+
+    def test_the_owners_rework_note_is_not_called_a_ci_failure(self) -> None:
+        self.commit_file("plan.md", PLAN.replace("draft", "approved"), email=WEB_EDITOR)
+        self.checkpoint("after_gate4", "4", extra="")
+        self.g.comments[-1]["body"] = self.g.comments[-1]["body"].replace(";stop=", ";stop=;rework=ok")
+        self.go("/rework make the button bigger")
+        self.assertEqual(self.calls[0]["note_kind"], "owner")
+
+    def test_an_unknown_option_is_refused_by_name_with_a_push(self) -> None:
+        for text, word in (("/go agent=local", "`agent=`"), ("/go model=gpt5", "`model=gpt5`"),
+                           ("/go minutes=ten", "`minutes=ten`"), ("/rework agent=local fix it", "`agent=`")):
+            with self.subTest(text=text):
+                self.g.comments.clear()
+                self.notify.reset_mock()
+                self.checkpoint("after_gate2", "2", extra=";rework=ok")
+                self.assertEqual(self.go(text), "refused")
+                self.assertIn("Refused", self.bot())
+                self.assertIn(word, self.bot())
+                self.assertEqual(self.dispatched, [])
+                self.notify.assert_called_once()
+                # answered once: the next tick does not refuse it again, and a corrected /go still runs
+                self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "waiting")  # type: ignore[arg-type]
+
+    def test_a_corrected_go_after_a_refusal_runs(self) -> None:
+        self.checkpoint("after_gate2", "2")
+        self.go("/go agent=local")
+        self.commit_file("threat-model.md", "| T1 | x | ACCEPTED |\n", email=WEB_EDITOR)
+        self.agent_files["research"] = "# Research\n\nNo open questions.\n"
+        self.agent_files["plan"] = PLAN
+        result = self.go("/go model=cheap")
+        self.assertNotEqual(result, "refused")
+        self.assertTrue(self.calls and all(c["model"] == "cheap" for c in self.calls))
+
+    def test_a_credit_failure_blocks_without_spending_a_retry(self) -> None:
+        self.checkpoint("after_gate2", "2")
+        self.commit_file("threat-model.md", "| T1 | x | ACCEPTED |\n", email=WEB_EDITOR)
+        def limit(*a: object, **k: object) -> str:
+            raise orchestrate.StepFailed("`research` failed:\nREFUSED: claude run failed. Tail: You've hit your 5-hour "
+                                         "limit\n[class: credit_exhausted] Reply `/go model=local` ...")
+
+        with mock.patch.object(orchestrate, "dispatch", side_effect=limit):
+            for _ in range(3):  # more than MAX_RETRIES: still blocked, never "a session is needed"
+                self.assertEqual(self.go("/go"), "blocked:credit_exhausted")
+                self.assertIn("blocked: credit_exhausted", self.bot())
+                self.assertIn("model=local", self.bot())
+
+    def test_a_command_that_was_never_acted_on_gets_one_notice(self) -> None:
+        # brevkoll#15: /go 527 was picked up, /go 534 arrived during the run and was never answered
+        self.checkpoint("after_gate2", "2")
+        first = self.g.comment("owner/app", 1, "/go minutes=17")
+        second = self.g.comment("owner/app", 1, "/go minutes=19")
+        self.g.comment("owner/app", 1, f"▶ Picked up `/go` (comment {first['id']}). Running `after_gate2`.")
+        self.checkpoint("after_research_questions", "3")
+        now = datetime.now(UTC)
+        for c in self.g.comments:
+            c["created_at"] = now.isoformat().replace("+00:00", "Z")
+        orchestrate.answer_unknown_commands(self.g, "owner/app", 1)  # type: ignore[arg-type]
+        notices = [c["body"] for c in self.g.comments if c["body"].startswith(orchestrate.NOTICE_PREFIX)]
+        self.assertEqual(len(notices), 1)
+        self.assertIn(f"comment {second['id']}", notices[0])
+        # never invite a resend: at the new checkpoint the same /go means something else (brevkoll#15 comment 584)
+        self.assertNotIn("again", notices[0].lower())
+        self.assertIn("CHECKPOINT 3", notices[0])  # it says where the issue is now
+        orchestrate.answer_unknown_commands(self.g, "owner/app", 1)  # type: ignore[arg-type]
+        self.assertEqual(len([c for c in self.g.comments if c["body"].startswith(orchestrate.NOTICE_PREFIX)]), 1)
+
+    def test_old_unanswered_commands_are_history_not_noise(self) -> None:
+        self.checkpoint("after_gate2", "2")
+        old = self.g.comment("owner/app", 1, "/go minutes=19")
+        old["created_at"] = "2020-01-01T00:00:00Z"
+        self.checkpoint("after_research_questions", "3")
+        orchestrate.answer_unknown_commands(self.g, "owner/app", 1)  # type: ignore[arg-type]
+        self.assertFalse(any(c["body"].startswith(orchestrate.NOTICE_PREFIX) for c in self.g.comments))
+
     # -- the plan checkpoint: approve, send back, or edit and send back
     AGENT = "factory-agent@users.noreply.local"
 
@@ -390,10 +487,23 @@ class GateTests(unittest.TestCase):
     def test_after_the_merge_the_staged_build_goes_and_main_is_mirrored(self) -> None:
         self.checkpoint("after_gate4", "4")
         self.g.closed_prs = [{**PR, "merged": True}]
+        self.g.open_prs = []
         self.assertEqual(self.go(), "ran after_gate4")
         self.stage_down.assert_called_once_with("app")
         self.mirror_push.assert_called_once()
         self.assertIn("CHECKPOINT 4b", self.bot())
+
+    def test_an_earlier_merged_pr_of_the_same_branch_does_not_count(self) -> None:
+        # brevkoll#15: PR #16 was merged, a rework opened PR #18 on the same branch, and a /go at the review checkpoint
+        # took #16 for the answer: the staged build was removed and "Merged on Gitea" was posted for an open PR
+        self.checkpoint("after_gate4", "4")
+        self.g.closed_prs = [{**PR, "number": 6, "merged": True}]
+        self.g.open_prs = [PR]
+        self.assertEqual(self.go(), "needs human")
+        self.assertIn("PR #7", self.bot())
+        self.assertIn("not merged yet", self.bot())
+        self.stage_down.assert_not_called()
+        self.mirror_push.assert_not_called()
 
     def test_an_unmerged_pr_is_not_treated_as_done(self) -> None:
         self.checkpoint("after_gate4", "4")
@@ -405,6 +515,7 @@ class GateTests(unittest.TestCase):
     def test_a_refused_mirror_push_is_shown_not_swallowed(self) -> None:
         self.checkpoint("after_gate4", "4")
         self.g.closed_prs = [{**PR, "merged": True}]
+        self.g.open_prs = []
         self.mirror_push.side_effect = SystemExit("REFUSED: internal names")
         self.assertEqual(self.go(), "needs human")
         self.assertIn("NOT pushed to the GitHub mirror", self.bot())

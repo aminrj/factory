@@ -1,6 +1,6 @@
 # Board
 
-_Generated 2026-11-21 07:59 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-21 15:21 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
@@ -18,7 +18,7 @@ _Generated 2026-11-21 07:59 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| Ready for the cluster: the model over mutual TLS, and a hardened deploy/ base | brevkoll#19 |
 
 ## building
 

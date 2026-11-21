@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Staging on the devbox: build the PR head of an app, run it in a fixed sandbox, print the tailnet URL.
+"""Staging on the GPU workstation: build the PR head of an app, run it in a fixed sandbox, print the tailnet URL.
 
 Usage:
   stage.py up <app> <issue>     build the head of the OPEN PR for agent/issue-<n> and (re)start it
@@ -14,14 +14,18 @@ Rules (the human only clicks the link):
     so nothing is loaded; the model list is open and proves nothing). A rejected key or an unreachable endpoint stops
     staging; a busy or loading model is reported and staging goes on.
   - The sandbox policy is fixed here, not chosen per app: read-only root, no capabilities, no new privileges,
-    memory and pid limits, tmpfs for /tmp and /data, one container per app, restarts with the devbox.
+    memory and pid limits, tmpfs for /tmp and /data, one container per app, restarts with the GPU workstation.
   - The model comes from ~/.config/factory/staging.env (bring your own model: any OpenAI-compatible endpoint;
     LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, optional LLM_API_KEY and LLM_TLS_*_FILE). Keys starting with STAGING_ are
-    for this script and are not passed on: STAGING_HOST (name shown in the link; default: the tailnet IP).
+    for this script and are not passed on: STAGING_HOST (name shown in the link; default: the tailnet IP), STAGING_BIND_IP
+    (the address the staged build listens on; default: the tailnet IP). On the devbox VM, which has no Tailscale of its own
+    and is reached through the tailnet's subnet router, STAGING_BIND_IP is its LAB address.
     ~/.config/factory/apps/<app>.env adds app-specific settings. Both files are mode 0600 and never tracked.
     Do not copy a secret into them: `LLM_API_KEY_FILE=<path>` makes stage.py read the key from its source file.
     `scripts/doctor.py` checks all of this.
   - The URL is only ever written to Gitea comments and the ignored state/ folder, never to a tracked file.
+  - Two containers per app, same image and policy: one on the tailnet address (phones and other devices) and a twin on
+    127.0.0.1 for a browser on this machine (the Windows host cannot reach the tailnet address of its own WSL service).
 Contract for an app image: starts with a CMD that has `--host` and `--port`, serves /healthz, writes only to /tmp
 and /data, runs as a non-root user.
 
@@ -101,7 +105,20 @@ def tailnet_ip() -> str:
         m = re.search(r"inet (100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d+\.\d+)/", line)
         if m:
             return m.group(1)
-    raise StageError("No tailnet address on this machine. Is the Windows host's Tailscale connected?")
+    raise StageError("No tailnet address on this machine. Is the Windows host's Tailscale connected? (On a host reached "
+                     "through a subnet router, set STAGING_BIND_IP in staging.env.)")
+
+
+def bind_ip(env: dict[str, str]) -> str:
+    """STAGING_BIND_IP when set, else the tailnet address. Only an address this machine has, never every interface."""
+    want = env.get("STAGING_BIND_IP", "").strip()
+    if not want:
+        return tailnet_ip()
+    if want in ("0.0.0.0", "*") or not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", want):
+        raise StageError(f"STAGING_BIND_IP={want} is not allowed: name one address of this machine")
+    if not re.search(rf"inet {re.escape(want)}/", sh("ip", "-4", "-o", "addr")):
+        raise StageError(f"STAGING_BIND_IP={want} is not an address of this machine")
+    return want
 
 
 def load_registry() -> dict[str, dict]:
@@ -207,6 +224,24 @@ def resolve_target(g: Gitea, repo: str, clone: Path, issue: int | None, ref: str
     return pr["head"]["sha"], branch
 
 
+def run_args(name: str, app: str, image: str, bind_ip: str, port: int, env_file: str, host_net: bool) -> list[str]:
+    """The docker run command for one staged container: the fixed sandbox policy, the model env file, and either the host
+    network with the app told to bind `bind_ip` (the model is on loopback) or a published port on `bind_ip`."""
+    args = ["docker", "run", "-d", "--name", name, "--label", f"factory.stage={app}", *POLICY, "--env-file", env_file]
+    if host_net:
+        return [*args, "--network", "host", image, *command_for(image, bind_ip, port)]
+    return [*args, "-p", f"{bind_ip}:{port}:{INTERNAL_PORT}", image]
+
+
+LOOPBACK = "127.0.0.1"
+
+
+def twin_args(app: str, image: str, port: int, env_file: str, host_net: bool) -> list[str]:
+    """The twin for a browser on this machine: the same image and sandbox, reachable on loopback only. A Windows host cannot
+    reach the tailnet address of the WSL service it hosts (the request hangs), but it reaches localhost."""
+    return run_args(f"stage-{app}-local", app, image, LOOPBACK, port, env_file, host_net)
+
+
 def up(app: str, issue: int | None = None, ref: str | None = None) -> dict:
     g = Gitea()
     repo = f"{g.user}/{app}"
@@ -217,43 +252,41 @@ def up(app: str, issue: int | None = None, ref: str | None = None) -> dict:
     model = load_model_env(app)
     if not model.get("LLM_BASE_URL"):
         raise StageError(f"No model configured: put LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL in {CONF / 'staging.env'}")
-    host_name = model.pop("STAGING_HOST", "") or tailnet_ip()
+    ip = bind_ip(model)
+    host_name = model.pop("STAGING_HOST", "") or ip
     model = {k: v for k, v in model.items() if not k.startswith("STAGING_")}
     model_status = preflight_model(model)
 
     reg = load_registry()
     port = pick_port(reg, app)
-    ip = tailnet_ip()
     image = f"{app}-stage:{sha[:7]}"
     if not sh("docker", "images", "-q", image):
         archive = subprocess.run(["git", "archive", sha], cwd=clone, capture_output=True, check=True).stdout
         sh("docker", "build", "-q", "-t", image, "-", stdin=archive)
 
     name = f"stage-{app}"
-    sh("docker", "rm", "-f", name, check=False)
+    for old in (name, f"{name}-local"):
+        sh("docker", "rm", "-f", old, check=False)
     host_net = is_loopback(model["LLM_BASE_URL"])
-    args = ["docker", "run", "-d", "--name", name, "--label", f"factory.stage={app}", *POLICY]
     with tempfile.NamedTemporaryFile("w", delete=True, dir=STATE if STATE.exists() else None) as envf:
         os.chmod(envf.name, 0o600)
         envf.write("".join(f"{k}={v}\n" for k, v in model.items()))
         envf.flush()
-        args += ["--env-file", envf.name]
-        if host_net:
-            args += ["--network", "host", image, *command_for(image, ip, port)]
-        else:
-            args += ["-p", f"{ip}:{port}:{INTERNAL_PORT}", image]
-        sh(*args)
+        sh(*run_args(name, app, image, ip, port, envf.name, host_net))
+        sh(*twin_args(app, image, port, envf.name, host_net))
     wait_healthy(f"http://{ip}:{port}/healthz")
+    wait_healthy(f"http://{LOOPBACK}:{port}/healthz")
 
     info = {"app": app, "issue": issue, "ref": label, "model": model_status, "sha": sha, "port": port, "network": "host" if host_net else "bridge",
-            "ip": ip, "url": f"http://{host_name}:{port}/", "started": datetime.now(UTC).isoformat(timespec="seconds")}
+            "ip": ip, "url": f"http://{host_name}:{port}/", "local_url": f"http://localhost:{port}/", "started": datetime.now(UTC).isoformat(timespec="seconds")}
     reg[app] = info
     save_registry(reg)
     return info
 
 
 def down(app: str) -> bool:
-    sh("docker", "rm", "-f", f"stage-{app}", check=False)
+    for name in (f"stage-{app}", f"stage-{app}-local"):
+        sh("docker", "rm", "-f", name, check=False)
     reg = load_registry()
     gone = reg.pop(app, None) is not None
     save_registry(reg)

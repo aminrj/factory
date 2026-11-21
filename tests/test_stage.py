@@ -48,6 +48,38 @@ class StageTests(unittest.TestCase):
         with mock.patch.object(stage, "sh", return_value='["python", "app.py"]'), self.assertRaises(stage.StageError):
             stage.command_for("img", "100.64.0.9", 8800)
 
+    def test_the_loopback_twin_has_the_same_sandbox_and_binds_127_0_0_1_only(self) -> None:
+        cmd = '["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]'
+        with mock.patch.object(stage, "sh", return_value=cmd):
+            tail = stage.run_args("stage-a", "a", "img", "100.64.0.9", 8800, "/e", True)
+            twin = stage.run_args("stage-a-local", "a", "img", "127.0.0.1", 8800, "/e", True)
+        self.assertEqual(tail[-4:], ["--host", "100.64.0.9", "--port", "8800"])
+        self.assertEqual(twin[-4:], ["--host", "127.0.0.1", "--port", "8800"])
+        for flag in ("--read-only", "--cap-drop", "no-new-privileges", "--memory", "--pids-limit"):
+            self.assertIn(flag, tail)
+            self.assertIn(flag, twin)
+        self.assertNotIn("0.0.0.0", " ".join(twin))  # never on every interface
+
+    def test_the_twin_function_can_only_ever_bind_loopback(self) -> None:
+        cmd = '["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]'
+        with mock.patch.object(stage, "sh", return_value=cmd):
+            host = stage.twin_args("a", "img", 8800, "/e", True)
+        bridge = stage.twin_args("a", "img", 8800, "/e", False)
+        self.assertEqual(host[-4:], ["--host", "127.0.0.1", "--port", "8800"])
+        self.assertIn("127.0.0.1:8800:8000", bridge)
+        self.assertIn("stage-a-local", host)
+
+    def test_a_bridge_twin_publishes_on_loopback_only(self) -> None:
+        twin = stage.run_args("stage-a-local", "a", "img", "127.0.0.1", 8800, "/e", False)
+        self.assertIn("127.0.0.1:8800:8000", twin)
+
+    def test_down_removes_both_containers(self) -> None:
+        removed: list[str] = []
+        with mock.patch.object(stage, "sh", side_effect=lambda *a, **k: removed.append(a[-1]) or ""), \
+                mock.patch.object(stage, "load_registry", return_value={"a": {}}), mock.patch.object(stage, "save_registry"):
+            stage.down("a")
+        self.assertEqual(removed, ["stage-a", "stage-a-local"])
+
     def test_policy_is_the_fixed_sandbox(self) -> None:
         for flag in ("--read-only", "--cap-drop", "no-new-privileges", "--memory", "--pids-limit"):
             self.assertIn(flag, stage.POLICY)
@@ -94,6 +126,20 @@ class StageTests(unittest.TestCase):
             self.assertEqual(stage.resolve_target(G(), "o/a", Path("."), 2, None), ("aaa", "agent/issue-2"))  # type: ignore[arg-type]
             with self.assertRaises(stage.StageError):
                 stage.resolve_target(G(), "o/a", Path("."), 1, None)  # type: ignore[arg-type]
+
+    def test_bind_address_defaults_to_the_tailnet_and_never_every_interface(self) -> None:
+        addrs = "2: eth0    inet 10.0.40.12/24 brd x\n3: ts0    inet 100.101.1.2/32 x\n"
+        with mock.patch.object(stage, "sh", return_value=addrs):
+            self.assertEqual(stage.bind_ip({}), "100.101.1.2")
+            self.assertEqual(stage.bind_ip({"STAGING_BIND_IP": "10.0.40.12"}), "10.0.40.12")
+            for bad in ("0.0.0.0", "*", "10.0.40.99", "devbox"):
+                with self.subTest(bad=bad), self.assertRaises(stage.StageError):
+                    stage.bind_ip({"STAGING_BIND_IP": bad})
+
+    def test_without_a_tailnet_address_the_error_names_the_setting(self) -> None:
+        with mock.patch.object(stage, "sh", return_value="2: eth0    inet 10.0.40.12/24 brd x\n"):
+            with self.assertRaisesRegex(stage.StageError, "STAGING_BIND_IP"):
+                stage.bind_ip({})
 
     def test_env_file_parser_and_staging_keys(self) -> None:
         import tempfile
