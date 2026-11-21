@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-21 04:49 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-21 05:47 UTC by `scripts/collect_metrics.py`._
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
 
 ## spec-ready
 
