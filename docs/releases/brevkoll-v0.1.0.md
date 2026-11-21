@@ -48,7 +48,7 @@ Decision already made: run on the devbox, not on the cluster (the cluster hosts 
 | 1 | Model: the model on `:8090` belongs to the assistant and the GPU arbiter can unload it. | Use it for now. When it is gone the app answers 502 and nothing else breaks. A separate always-on model needs VRAM you do not have. |
 | 2 | LAN access for the phone. | A reverse proxy rule with access control, or an SSH tunnel for the first test. Not a public port: the app has no login (accepted risk R3). |
 | 3 | Push to the Gitea registry. | Skip for v0.1.0. It needs a package token (I will not create one) and nothing consumes the image yet. Do it with the cluster deploy. |
-| 4 | Hostname `brevkoll.lab.aminrj.com`. | Only after decision 2. It is already visible in the mirrored spec, so it is not a secret. |
+| 4 | Hostname for the app. | Only after decision 2. |
 
 ## Not in this plan
 
