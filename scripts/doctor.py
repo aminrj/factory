@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check that this machine is ready to run the factory. Prints ok / WARN / FAIL with a fix hint; never prints a value.
 
-Usage: doctor.py [--app <name>]
+Usage: doctor.py [--app <name>] [--install-hooks]
 
 Checks the loose files the factory depends on (modes, required keys, no copied secrets), the model endpoint with its key,
 the tailnet address, Docker, the Gitea token, the mirror deny list and the timers. Exit 1 when something FAILs.
@@ -90,6 +90,67 @@ def check_runtime() -> None:
         "git -C factory switch main (keep dev work in a worktree: git worktree add ../worktrees/factory-<topic> -b <branch>)")
 
 
+HOOK_MARK = "# factory runtime guard"
+
+
+def hook_texts(runtime: Path) -> dict[str, str]:
+    """Git hooks for the runtime checkout. Hooks live in the shared .git directory, so each one first checks that it is
+    running in the runtime folder: worktrees of the same repo are not affected."""
+    return {
+        "pre-commit": f"""#!/bin/sh
+{HOOK_MARK}
+if [ "$(git rev-parse --show-toplevel)" = "{runtime}" ] && [ "$GIT_AUTHOR_NAME" != "factory-orchestrator" ]; then
+  echo "REFUSED: {runtime} is the factory runtime (the timers run it). Do not commit here." >&2
+  echo "Work in a worktree: git worktree add ../worktrees/factory-<topic> -b <branch> origin/main" >&2
+  exit 1
+fi
+""",
+        "post-checkout": f"""#!/bin/sh
+{HOOK_MARK}
+if [ "$3" = "1" ] && [ "$(git rev-parse --show-toplevel)" = "{runtime}" ]; then
+  b=$(git rev-parse --abbrev-ref HEAD)
+  if [ "$b" != "main" ]; then
+    echo "WARNING: you switched the factory runtime to '$b'. The timers now run that code and the orchestrator pauses." >&2
+    echo "Switch back: git switch main. Work in a worktree: git worktree add ../worktrees/factory-<topic> -b <branch> origin/main" >&2
+  fi
+fi
+""",
+    }
+
+
+def hooks_dir(runtime: Path) -> Path:
+    common = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=runtime, capture_output=True, text=True,
+                            check=False).stdout.strip()
+    return (runtime / common).resolve() / "hooks"
+
+
+def hooks_installed(runtime: Path) -> bool:
+    d = hooks_dir(runtime)
+    return all((d / name).exists() and (d / name).read_text() == text for name, text in hook_texts(runtime).items())
+
+
+def install_hooks(runtime: Path) -> None:
+    d = hooks_dir(runtime)
+    d.mkdir(parents=True, exist_ok=True)
+    for name, text in hook_texts(runtime).items():
+        path = d / name
+        if path.exists() and HOOK_MARK not in path.read_text():
+            raise SystemExit(f"{path} exists and is not ours; merge it by hand.")
+        path.write_text(text)
+        path.chmod(0o755)
+
+
+def check_hooks(install: bool) -> None:
+    runtime = (stage.WORK / "factory").resolve()
+    if not (runtime / ".git").exists():
+        return
+    if install:
+        install_hooks(runtime)
+    ok = hooks_installed(runtime)
+    say("ok" if ok else "WARN", "runtime guard hooks installed" if ok else "runtime guard hooks are not installed",
+        "python3 factory/scripts/doctor.py --install-hooks (stops a second session from committing in the runtime folder)")
+
+
 def check_kit() -> None:
     """The kit in factory-ops is the source, factory/scripts the runtime copy. They drifted once (a fix lived only in the
     runtime copy). Any script present in both must be identical."""
@@ -117,6 +178,7 @@ def main(argv: list[str]) -> int:
     check_model(app)
     check_machine()
     check_runtime()
+    check_hooks("--install-hooks" in argv)
     check_kit()
     check_gitea()
     fails = sum(1 for lvl, *_ in results if lvl == "FAIL")

@@ -256,6 +256,46 @@ class RuntimeGuardTests(unittest.TestCase):
             subprocess.run(["git", "switch", "-q", "-c", "feat/x"], cwd=r, check=True)
             self.assertIn("feat/x", orchestrate.runtime_problem(r) or "")
 
+    def test_local_commits_that_block_a_fast_forward_are_a_problem(self) -> None:
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            origin = Path(d) / "o"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(origin)], check=True)
+            ident = ["-c", "user.email=a@b", "-c", "user.name=a"]
+            (origin / "f").write_text("1")
+            subprocess.run(["git", "add", "-A"], cwd=origin, check=True)
+            subprocess.run(["git", *ident, "commit", "-q", "-m", "1"], cwd=origin, check=True)
+            clone = Path(d) / "c"
+            subprocess.run(["git", "clone", "-q", str(origin), str(clone)], check=True, capture_output=True)
+            self.assertIsNone(orchestrate.runtime_behind(clone))
+            (clone / "g").write_text("local")
+            subprocess.run(["git", "add", "-A"], cwd=clone, check=True)
+            subprocess.run(["git", *ident, "commit", "-q", "-m", "local"], cwd=clone, check=True)
+            (origin / "f").write_text("2")
+            subprocess.run(["git", *ident, "commit", "-q", "-am", "2"], cwd=origin, check=True)
+            subprocess.run(["git", "fetch", "-q", "origin"], cwd=clone, check=True)
+            self.assertIn("local commits", orchestrate.runtime_behind(clone) or "")
+
+    def test_a_fast_forward_restarts_the_tick_with_the_new_code(self) -> None:
+        heads = iter(["aaa", "bbb", "bbb"])
+        with mock.patch.object(orchestrate, "runtime_problem", return_value=None), \
+                mock.patch.object(orchestrate, "update_runtime"), mock.patch.object(orchestrate, "runtime_behind", return_value=None), \
+                mock.patch.object(orchestrate, "head_of", side_effect=lambda *a: next(heads)), \
+                mock.patch.object(orchestrate, "log"), mock.patch.object(orchestrate.os, "execv") as execv, \
+                mock.patch.object(orchestrate, "STATE", Path("/nonexistent")):
+            orchestrate.guard_runtime()
+        execv.assert_called_once()
+
+    def test_no_restart_when_nothing_changed(self) -> None:
+        with mock.patch.object(orchestrate, "runtime_problem", return_value=None), \
+                mock.patch.object(orchestrate, "update_runtime"), mock.patch.object(orchestrate, "runtime_behind", return_value=None), \
+                mock.patch.object(orchestrate, "head_of", return_value="aaa"), mock.patch.object(orchestrate.os, "execv") as execv, \
+                mock.patch.object(orchestrate, "STATE", Path("/nonexistent")):
+            self.assertTrue(orchestrate.guard_runtime())
+        execv.assert_not_called()
+
     def test_local_code_changes_are_a_problem(self) -> None:
         import tempfile
 
