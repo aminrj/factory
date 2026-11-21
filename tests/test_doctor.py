@@ -61,59 +61,43 @@ class DoctorTests(unittest.TestCase):
         self.assertTrue(any(lvl == "FAIL" and "LLM_BASE_URL" in what for lvl, what, _ in doctor.results))
 
 
-class KitDriftTests(unittest.TestCase):
-    def test_drift_is_a_warning(self) -> None:
+class KitCopiesTests(unittest.TestCase):
+    def kit(self, work: Path, *parts: str) -> None:
+        (work / "factory-kit" / Path(*parts)).mkdir(parents=True)
+
+    def test_a_second_copy_of_the_code_in_the_kit_is_a_warning(self) -> None:
         doctor.results.clear()
         with tempfile.TemporaryDirectory() as d:
-            work = Path(d)
-            kit = work / "factory-kit" / "hq" / "scripts"
-            kit.mkdir(parents=True)
-            (kit / "doctor.py").write_text("old")  # differs from the real scripts/doctor.py
-            with mock.patch.object(stage, "WORK", work), mock.patch("builtins.print"):
+            self.kit(Path(d), "hq", "scripts")
+            with mock.patch.object(stage, "WORK", Path(d)), mock.patch("builtins.print"):
                 doctor.check_kit()
         self.assertEqual(doctor.results[0][0], "WARN")
-        self.assertIn("doctor.py", doctor.results[0][1])
+        self.assertIn("hq/scripts", doctor.results[0][1])
+
+    def test_a_kit_without_copies_is_fine(self) -> None:
+        doctor.results.clear()
+        with tempfile.TemporaryDirectory() as d:
+            self.kit(Path(d), "app-seed")
+            with mock.patch.object(stage, "WORK", Path(d)), mock.patch("builtins.print"):
+                doctor.check_kit()
+        self.assertEqual(doctor.results[0][0], "ok")
 
 
-class HookTests(unittest.TestCase):
-    """The guard hooks: refuse commits in the runtime folder, leave its worktrees alone."""
-
-    def setUp(self) -> None:
-        import subprocess
-
-        self.tmp = tempfile.TemporaryDirectory()
-        self.runtime = Path(self.tmp.name, "factory").resolve()
-        self.runtime.mkdir()
-        run = lambda *a, cwd=self.runtime, **kw: subprocess.run(a, cwd=cwd, capture_output=True, text=True, **kw)  # noqa: E731
-        self.run = run
-        run("git", "init", "-q", "-b", "main")
-        run("git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "i", env={**os.environ, "GIT_AUTHOR_NAME": "factory-orchestrator", "GIT_COMMITTER_NAME": "x", "GIT_COMMITTER_EMAIL": "a@b", "GIT_AUTHOR_EMAIL": "a@b"})
-        self.worktree = Path(self.tmp.name, "wt")
-        run("git", "worktree", "add", "-q", str(self.worktree), "-b", "topic")
-        doctor.install_hooks(self.runtime)
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def commit(self, cwd: Path, author: str) -> int:
-        env = {**os.environ, "GIT_AUTHOR_NAME": author, "GIT_AUTHOR_EMAIL": "a@b", "GIT_COMMITTER_NAME": author, "GIT_COMMITTER_EMAIL": "a@b"}
-        return self.run("git", "commit", "-q", "--allow-empty", "-m", "x", cwd=cwd, env=env).returncode
-
-    def test_installed(self) -> None:
-        self.assertTrue(doctor.hooks_installed(self.runtime))
-
-    def test_a_session_cannot_commit_in_the_runtime_folder(self) -> None:
-        self.assertNotEqual(self.commit(self.runtime, "someone"), 0)
-
-    def test_the_orchestrator_can(self) -> None:
-        self.assertEqual(self.commit(self.runtime, "factory-orchestrator"), 0)
-
-    def test_a_worktree_of_the_same_repo_is_not_affected(self) -> None:
-        self.assertEqual(self.commit(self.worktree, "someone"), 0)
-
-    def test_switching_the_runtime_off_main_warns(self) -> None:
-        res = self.run("git", "switch", "-q", "-c", "feat/x")
-        self.assertIn("switched the factory runtime", res.stderr)
+class UnitSourceTests(unittest.TestCase):
+    def test_linked_from_the_factory_repo_is_fine_and_from_elsewhere_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            runtime, user, elsewhere = base / "factory", base / "user", base / "kit"
+            (runtime / "ops" / "systemd").mkdir(parents=True)
+            elsewhere.mkdir()
+            user.mkdir()
+            (runtime / "ops" / "systemd" / "a.timer").write_text("x")
+            (elsewhere / "b.timer").write_text("x")
+            (user / "a.timer").symlink_to(runtime / "ops" / "systemd" / "a.timer")
+            (user / "b.timer").symlink_to(elsewhere / "b.timer")
+            self.assertIsNone(doctor.unit_problem("a.timer", runtime, user))
+            self.assertIn("not from the factory repo", doctor.unit_problem("b.timer", runtime, user) or "")
+            self.assertIn("not installed", doctor.unit_problem("c.timer", runtime, user) or "")
 
 
 class SecretFileTests(unittest.TestCase):

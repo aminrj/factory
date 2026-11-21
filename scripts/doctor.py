@@ -152,15 +152,37 @@ def check_hooks(install: bool) -> None:
 
 
 def check_kit() -> None:
-    """The kit in factory-ops is the source, factory/scripts the runtime copy. They drifted once (a fix lived only in the
-    runtime copy). Any script present in both must be identical."""
-    kit = stage.WORK / "factory-kit" / "hq" / "scripts"
-    run = Path(__file__).resolve().parent
-    if not kit.is_dir():
-        return
-    drift = sorted(f.name for f in kit.glob("*.py") if (run / f.name).exists() and f.read_bytes() != (run / f.name).read_bytes())
-    say("WARN" if drift else "ok", "kit scripts match the runtime copy" if not drift else f"kit differs from runtime: {', '.join(drift)}",
-        "copy the newer file to the other place and commit both (factory-ops and factory)")
+    """The factory repo is the one home of the code. A second copy in the kit gets overwritten by bootstrap.py or drifts
+    behind the runtime (it did, three times in one day). The kit may only hold bootstrap.py, its README and the app seed."""
+    kit = stage.WORK / "factory-kit"
+    dupes = [str(p.relative_to(stage.WORK)) for p in (kit / "hq" / "scripts", kit / "hq" / "tests", kit / "template") if p.exists()]
+    say("WARN" if dupes else "ok", f"the kit holds a second copy of the code: {', '.join(dupes)}" if dupes
+        else "the kit holds no second copy of the code", "delete it; the factory and factory-template repos are the source")
+
+
+def unit_problem(unit: str, runtime: Path, systemd_dir: Path) -> str | None:
+    """A timer must be linked from the runtime repo's ops/systemd, not from a copy somewhere else."""
+    link = systemd_dir / unit
+    if not link.exists():
+        return f"{unit} is not installed"
+    target = Path(os.path.realpath(link)).parent
+    if target != (runtime / "ops" / "systemd").resolve():
+        return f"{unit} is linked from {target}, not from the factory repo's ops/systemd"
+    return None
+
+
+def check_unit_sources() -> None:
+    runtime = stage.WORK / "factory"
+    for t in TIMERS:
+        for unit in (t, t.replace(".timer", ".service")):
+            problem = unit_problem(unit, runtime, Path.home() / ".config" / "systemd" / "user")
+            if problem:
+                say("WARN", problem, "factory/ops/install-timers.sh")
+                break
+        else:
+            continue
+    if not any(lvl == "WARN" and "linked from" in what for lvl, what, _ in results):
+        say("ok", "all timers are linked from the factory repo")
 
 
 def check_gitea() -> None:
@@ -180,6 +202,7 @@ def main(argv: list[str]) -> int:
     check_runtime()
     check_hooks("--install-hooks" in argv)
     check_kit()
+    check_unit_sources()
     check_gitea()
     fails = sum(1 for lvl, *_ in results if lvl == "FAIL")
     warns = sum(1 for lvl, *_ in results if lvl == "WARN")
