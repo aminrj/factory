@@ -674,12 +674,44 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         return "error"
 
 
+MERGES = STATE / "merges.json"
+
+
+def watched_repos(g: Gitea) -> list[str]:
+    apps = [x["full_name"] for x in g.paged("/repos/search?q=factory-app&topic=true")]
+    return sorted({f"{g.user}/factory", f"{g.user}/factory-template", *apps})
+
+
+def announce_merges(g: Gitea) -> None:
+    """Tell the owner when a pull request lands: title, where, and why (the first line of its body). The owner merges;
+    the factory only reports. The first run records 'now' and sends nothing."""
+    STATE.mkdir(exist_ok=True)
+    now = datetime.now(UTC).isoformat(timespec="seconds")
+    seen = json.loads(MERGES.read_text()) if MERGES.exists() else None
+    if seen is None:
+        MERGES.write_text(json.dumps({"since": now, "sent": []}))
+        return
+    sent = set(seen["sent"])
+    for repo in watched_repos(g):
+        for pr in g.get(f"/repos/{repo}/pulls?state=closed&sort=recentupdate&limit=20"):
+            key = f"{repo}#{pr['number']}"
+            if not pr.get("merged") or key in sent or (pr.get("merged_at") or "") <= seen["since"]:
+                continue
+            why = next((ln.strip() for ln in (pr.get("body") or "").splitlines() if ln.strip() and not ln.startswith("Refs")), "")
+            notify(f"Merged: {key}", f"{pr['title']}\n{why[:200]}", click=pr["html_url"], priority=3)
+            log(f"merged: {key} {pr['title'][:80]}")
+            sent.add(key)
+    MERGES.write_text(json.dumps({"since": seen["since"], "sent": sorted(sent)[-200:]}))
+
+
 def active_issues(g: Gitea) -> list[tuple[str, int]]:
     out = []
     for r in sorted(x["full_name"] for x in g.paged("/repos/search?q=factory-app&topic=true")):
         for i in g.paged(f"/repos/{r}/issues?state=open&type=issues"):
             names = {label["name"] for label in i.get("labels", [])}
-            if names & {"stage/spec-ready", "stage/building"}:
+            # idea: a change opened by new_change.py waits at Checkpoint 1 with this label (decide() ignores issues
+            # that have no checkpoint, so watching them is cheap)
+            if names & {"stage/idea", "stage/spec-ready", "stage/building"}:
                 out.append((r, i["number"]))
     return out
 
@@ -698,6 +730,11 @@ def main() -> None:
     if a.cmd == "run":
         print(process(g, f"{g.user}/{a.repo}", a.issue))
         return
+    if a.cmd == "tick" and not a.dry_run:
+        try:
+            announce_merges(g)
+        except Exception as e:  # noqa: BLE001 - a notification problem must never stop the run
+            log(f"announce_merges failed: {type(e).__name__}: {str(e)[:120]}")
     for repo, n in active_issues(g):
         if a.cmd == "status":
             d = decide(g, repo, n)
