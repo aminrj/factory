@@ -81,6 +81,15 @@ def check_machine() -> None:
         say("ok" if active == "active" else "WARN", f"{t} {active or 'unknown'}", f"systemctl --user enable --now {t}")
 
 
+def check_runtime() -> None:
+    """The timer runs the factory/ checkout. It must be on main with no local code changes, or it runs the wrong code."""
+    import orchestrate
+
+    problem = orchestrate.runtime_problem(stage.WORK / "factory")
+    say("FAIL" if problem else "ok", problem or "the runtime checkout is on main and clean",
+        "git -C factory switch main (keep dev work in a worktree: git worktree add ../worktrees/factory-<topic> -b <branch>)")
+
+
 def check_kit() -> None:
     """The kit in factory-ops is the source, factory/scripts the runtime copy. They drifted once (a fix lived only in the
     runtime copy). Any script present in both must be identical."""
@@ -107,6 +116,7 @@ def main(argv: list[str]) -> int:
     check_files(app)
     check_model(app)
     check_machine()
+    check_runtime()
     check_kit()
     check_gitea()
     fails = sum(1 for lvl, *_ in results if lvl == "FAIL")
