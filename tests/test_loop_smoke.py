@@ -7,6 +7,7 @@ fails this test when it comes back.
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -69,9 +70,16 @@ class FakeGitea:
         return 1
 
 
+def identity(email: str, name: str = "x") -> dict[str, str]:
+    """Explicit author and committer in the environment: the caller's own GIT_* variables (the orchestrator sets them)
+    must never decide who a test commit is by."""
+    return {**os.environ, "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name,
+            "GIT_COMMITTER_EMAIL": email}
+
+
 def git(cwd: Path, *args: str, email: str = BOT) -> str:
-    return subprocess.run(["git", "-c", f"user.email={email}", "-c", "user.name=x", *args], cwd=cwd, check=True,
-                          capture_output=True, text=True).stdout.strip()
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+                          env=identity(email)).stdout.strip()
 
 
 class LoopSmokeTests(unittest.TestCase):

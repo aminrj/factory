@@ -4,6 +4,7 @@ It decides whether a step may start: the spec exists, the threat model has no un
 `Status: approved` in a commit that the owner made. The factory identities never count as the owner, a web-editor commit does.
 """
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,8 +30,9 @@ class EntryGateTests(unittest.TestCase):
     def commit(self, rel: str, text: str, email: str, name: str = "x") -> None:
         (self.wt / "thoughts" / "1" / rel).write_text(text)
         subprocess.run(["git", "add", "-A"], cwd=self.wt, check=True)
-        subprocess.run(["git", "-c", f"user.email={email}", "-c", f"user.name={name}", "commit", "-q", "-m", rel], cwd=self.wt,
-                       check=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name,
+               "GIT_COMMITTER_EMAIL": email}  # explicit: the caller's GIT_* variables must not decide the author
+        subprocess.run(["git", "commit", "-q", "-m", rel], cwd=self.wt, check=True, env=env)
 
     def ready(self) -> None:
         self.commit("spec.md", "# Spec\n", "bot@x")

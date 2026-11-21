@@ -1,5 +1,6 @@
 """Orchestrator regressions. Run: python3 -m unittest discover -s tests -v"""
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -153,7 +154,8 @@ class SpecApprovalTests(unittest.TestCase):
         for email, text, msg in commits:
             (r / "thoughts" / "1" / "spec.md").write_text(text)
             subprocess.run(["git", "add", "-A"], cwd=r, check=True)
-            subprocess.run(["git", "-c", f"user.email={email}", "-c", "user.name=x", "commit", "-q", "-m", msg], cwd=r, check=True)
+            env = {**os.environ, "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": "x", "GIT_COMMITTER_EMAIL": email}
+            subprocess.run(["git", "commit", "-q", "-m", msg], cwd=r, check=True, env=env)
         subprocess.run(["git", "update-ref", "refs/remotes/origin/agent/issue-1", "HEAD"], cwd=r, check=True)
         return r
 
