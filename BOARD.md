@@ -1,14 +1,12 @@
 # Board
 
-_Generated 2026-11-22 15:49 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 16:18 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#29 | 1: the spec and its acceptance tests | 2026-11-22T15:31+00:00 | 0.3 |
-| brevkoll#26 | after_gate3-retry: a step failed | 2026-11-22T15:11+00:00 | 0.6 |
-| brevkoll#7 | after_gate2-fix: one thing is left for you | 2026-11-22T14:53+00:00 | 0.9 |
+| brevkoll#7 | after_gate2-fix: one thing is left for you | 2026-11-22T14:53+00:00 | 1.4 |
 
 ## idea
 
