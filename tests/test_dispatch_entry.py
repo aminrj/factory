@@ -287,3 +287,30 @@ class DraftStatusTests(unittest.TestCase):
             spec.write_text("# Spec\n\nStatus: approved\n")
             dispatch.add_draft_status(spec)
             self.assertEqual(spec.read_text(), "# Spec\n\nStatus: approved\n")  # an existing line is never touched
+
+
+class PlaceHoldoutTests(unittest.TestCase):
+    def test_stray_test_files_of_the_issue_go_to_the_holdout_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wt = Path(tmp)
+            env = {**os.environ, "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": "x@x", "GIT_COMMITTER_NAME": "x",
+                   "GIT_COMMITTER_EMAIL": "x@x"}
+            subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True)
+            (wt / "tests" / "holdout").mkdir(parents=True)
+            (wt / "tests" / "holdout" / "test_old.py").write_text("x = 1\n")
+            subprocess.run(["git", "add", "-A"], cwd=wt, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=wt, check=True, env=env)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True).stdout.strip()
+            # what the local model did on brevkoll#7, plus a file of another issue that must stay
+            (wt / "tests" / "holdout_issue_7.py").write_text("def test_ac1():\n    assert False\n")
+            (wt / "tests" / "holdout_test_issue_7.py").write_text("")
+            (wt / "tests" / "test_issue_70.py").write_text("def test_x():\n    pass\n")
+            subprocess.run(["git", "add", "-A"], cwd=wt, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "agent"], cwd=wt, check=True, env=env)
+            with mock.patch.dict(os.environ, env):
+                moved = dispatch.place_holdout_tests(wt, 7, base)
+            self.assertTrue((wt / "tests" / "holdout" / "test_issue_7.py").read_text().startswith("def test_ac1"))
+            self.assertFalse((wt / "tests" / "holdout_issue_7.py").exists())
+            self.assertFalse((wt / "tests" / "holdout_test_issue_7.py").exists())
+            self.assertTrue((wt / "tests" / "test_issue_70.py").exists())
+            self.assertEqual(len(moved), 2)

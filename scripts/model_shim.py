@@ -267,10 +267,18 @@ def make_handler(cfg: dict[str, str], refresh_s: float = 30) -> type[http.server
             conn.close()
 
         def do_POST(self) -> None:  # noqa: N802
-            self.forward("POST")
+            self.quietly("POST")
 
         def do_GET(self) -> None:  # noqa: N802
-            self.forward("GET")
+            self.quietly("GET")
+
+        def quietly(self, method: str) -> None:
+            # Claude Code hangs up on streams it no longer needs; that is not an error, and its traceback ended up in
+            # a checkpoint's diagnosis (brevkoll#7, 2026-11-22) and hid the real reason.
+            try:
+                self.forward(method)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
 
     return Handler
 

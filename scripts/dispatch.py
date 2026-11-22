@@ -250,13 +250,41 @@ def spec_prompt(n: int, repo: str, branch: str) -> str:
         "examples. Keep it small: one change, a Size, a Timebox, numbered acceptance criteria (AC1, AC2, ...), a Contract "
         "section and an Out of scope section. The line `Status: draft` must be near the top; never write `Status: approved`. "
         "Write no `<` placeholders: if something is unknown, decide the smallest reasonable thing and say so under "
-        f"'Assumptions'. Then write the holdout tests in tests/holdout/test_issue_{n}.py: one test per acceptance "
+        f"'Assumptions'. Then write the holdout tests in exactly one file, tests/holdout/test_issue_{n}.py (that path, "
+        "inside the tests/holdout/ folder): one test per acceptance "
         "criterion, named after it, that fails on the current code and passes once the change is built, using only the "
         "Contract. Run `uv run ruff format tests/holdout` and `uv run pytest tests/holdout/test_issue_"
         f"{n}.py` (they should fail for the right reason). Do not change src/ or any other test. Do not run git push. "
         "Commit with git add and git commit. Finish with a short review guide: the assumptions you made and what the "
         "owner should check first."
     )
+
+
+def place_holdout_tests(wt: Path, n: int, head_before: str) -> list[str]:
+    """Tests for this issue that the spec step wrote outside tests/holdout/ go to tests/holdout/test_issue_N.py, and
+    empty ones are dropped. brevkoll#7: the local model wrote tests/holdout_issue_7.py (158 lines) and an empty
+    tests/holdout_test_issue_7.py, and the guard refused the whole draft. Returns what was moved, for the review guide."""
+    target = wt / "tests" / "holdout" / f"test_issue_{n}.py"
+    out = run("git", "diff", "--name-only", "--diff-filter=A", f"{head_before}", "--", "tests", cwd=wt).splitlines()
+    out += run("git", "ls-files", "--others", "--exclude-standard", "--", "tests", cwd=wt).splitlines()
+    stray = sorted({f for f in out if f.endswith(".py") and not f.startswith("tests/holdout/")
+                    and re.search(rf"(holdout|issue)[_-]?{n}(?!\d)", f)})
+    moved = []
+    for f in stray:
+        path = wt / f
+        if not path.exists():
+            continue
+        if not path.read_text().strip() or target.exists():
+            path.unlink()
+            moved.append(f"{f} (dropped)")
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        path.rename(target)
+        moved.append(f"{f} -> {target.relative_to(wt)}")
+    if moved:
+        run("git", "add", "-A", "tests", cwd=wt)
+        run("git", "commit", "-q", "-m", f"#{n} spec: holdout tests moved to tests/holdout/", cwd=wt, env=agent_env())
+    return moved
 
 
 def add_draft_status(spec: Path) -> None:
@@ -462,6 +490,7 @@ def main() -> None:
 
     if step == "spec":
         add_draft_status(wt / "thoughts" / str(n) / "spec.md")
+        place_holdout_tests(wt, n, head_before)
         problem = spec_draft_problem(wt, n, head_before)
         if problem:
             die(problem)
