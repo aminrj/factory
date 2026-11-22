@@ -1,18 +1,19 @@
 # Board
 
-_Generated 2026-11-22 19:49 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 21:51 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 0.7 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 2.7 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
 | Support a model endpoint that needs a client certificate (mutual TLS) | brevkoll#14 |
+| OCR misreads characters in the letter, for example the @ in an email address | brevkoll#6 |
 
 ## spec-ready
 
