@@ -405,6 +405,8 @@ def main() -> None:
         "is_error": bool(result.get("is_error")) or proc.returncode != 0, "fallback": False,
         "model": args.model or "default",
     }
+    if record["is_error"]:  # the class only: data/ is mirrored, an error text may hold internal names
+        record["class"] = classify(str(result.get("result"))[-500:]) or "agent_error"
     DATA.mkdir(exist_ok=True)
     with (DATA / "agent_runs.jsonl").open("a") as fh:
         fh.write(json.dumps(record) + "\n")

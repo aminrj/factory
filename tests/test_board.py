@@ -88,3 +88,38 @@ class PageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoardV2Tests(unittest.TestCase):
+    def test_queued_commands_and_the_error_of_a_blocked_item_are_on_the_card(self) -> None:
+        blocked = {"body": "🛑 CHECKPOINT implement-blocked: blocked: model_unavailable\n\nDiagnosis:\n\n```\nline a\n"
+                           "model=local: no local model is serving [class: model_unavailable]\n```\n\nNo retry.",
+                   "created_at": "2026-11-22T11:00:00Z"}
+        view = {"pivot": blocked, "running": False,
+                "pending": [{"body": "/go model=fast\nplease", "created_at": "2026-11-22T11:50:00Z"}]}
+        c = board.card(issue(), "owner/app", "https://git", view, [], NOW, {})
+        self.assertEqual(c["col"], "blocked")
+        self.assertEqual(c["queued"], [{"text": "/go model=fast", "age": "10 min"}])
+        self.assertIn("no local model is serving", c["diagnosis"])
+        with tempfile.TemporaryDirectory() as tmp:
+            page = board.render([c], [], board.analytics(Path(tmp), NOW), [], NOW, "host", busy="busy with app#2")
+        self.assertIn("command(s) waiting for the foreman", page)
+        self.assertIn("What went wrong", page)
+        self.assertIn("busy with app#2", page)
+        self.assertIn("data-tags='blocked app mine queued'", page)
+
+    def test_failures_are_listed_by_class(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "agent_runs.jsonl").write_text("\n".join(json.dumps(x) for x in [
+                {"ts": "2026-11-22T10:00:00Z", "repo": "app", "issue": 3, "step": "implement", "is_error": True,
+                 "class": "credit_exhausted", "model": "smart"},
+                {"ts": "2026-11-22T10:30:00Z", "repo": "app", "issue": 3, "step": "plan", "is_error": True},
+                {"ts": "2026-11-22T11:00:00Z", "repo": "app", "issue": 3, "step": "plan"}]) + "\n")
+            s = board.analytics(d, NOW)
+        self.assertEqual(dict(s["classes"]), {"credit_exhausted": 1, "unknown (recorded before classes)": 1})
+        self.assertEqual([f["step"] for f in s["failures"]], ["plan", "implement"])  # newest first
+        page = board.render([], [], s, [], NOW, "host")
+        self.assertIn("credit_exhausted", page)
+        self.assertIn("What the checkpoints mean", page)
+        self.assertIn("id='q'", page)  # the filter

@@ -342,7 +342,7 @@ def run(g: Gitea, print_only: bool = False) -> str:
     if not print_only:
         g.call("PATCH", f"/repos/{g.user}/factory/issues/{status_issue(g)}", {"body": body})
         try:
-            write_board(g, now, views, steps, tick_s, beat_age, mirrors, spend_today(now))
+            write_board(g, now, views, steps, tick_s, beat_age, mirrors, spend_today(now), running)
         except Unreachable:
             raise
         except Exception as e:  # noqa: BLE001 - the board is a view; the status issue above is the fallback
@@ -393,8 +393,17 @@ def board_health(now: datetime, tick_s: int | None, beat_age: float | None, view
     return h
 
 
+def busy_text(tick_s: int | None, running: dict | None) -> str:
+    if tick_s is None:
+        return ""
+    what = f"{running['app']}#{running['n']} (`{running['step']}`)" if running else "a step"
+    return (f"The foreman has been busy for {tick_s // 60} min with {what}. It runs one item at a time: commands on "
+            "other items wait until that step ends (each gets an acknowledgement right away); a command on that same "
+            "item is answered at its next checkpoint.")
+
+
 def write_board(g: Gitea, now: datetime, views: list[dict], steps: dict, tick_s: int | None, beat_age: float | None,
-                mirrors: dict[str, str], spend: dict[str, float]) -> None:
+                mirrors: dict[str, str], spend: dict[str, float], running: dict | None = None) -> None:
     holder = None
     if lease.enabled():
         try:
@@ -402,7 +411,8 @@ def write_board(g: Gitea, now: datetime, views: list[dict], steps: dict, tick_s:
         except Exception:  # noqa: BLE001
             holder = None
     page = board.render(board_cards(g, views, steps, now), board_health(now, tick_s, beat_age, views, mirrors, spend,
-                        holder), board.analytics(o.DATA, now), recent_log(o.WORK, 15), now, socket.gethostname())
+                        holder), board.analytics(o.DATA, now), recent_log(o.WORK, 15), now, socket.gethostname(),
+                        busy_text(tick_s, running))
     board.write(state_file(BOARD_FILE), page)
 
 
