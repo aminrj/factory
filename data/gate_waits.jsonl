@@ -60,3 +60,5 @@
 {"ts": "2026-11-22T16:39:24+00:00", "repo": "brevkoll", "issue": 29, "checkpoint": "after_gate3", "answer": "go", "wait_min": 3.6, "comment_id": 1116}
 {"ts": "2026-11-22T17:40:54+00:00", "repo": "brevkoll", "issue": 29, "checkpoint": "after_gate3", "answer": "go", "wait_min": 42.8, "comment_id": 1157}
 {"ts": "2026-11-22T17:45:14+00:00", "repo": "brevkoll", "issue": 26, "checkpoint": "manual", "answer": "stop", "wait_min": 85.6, "comment_id": 1163}
+{"ts": "2026-11-22T17:55:00+00:00", "repo": "brevkoll", "issue": 14, "checkpoint": "pick_up", "answer": "go", "wait_min": 73.0, "comment_id": 1160}
+{"ts": "2026-11-22T17:57:10+00:00", "repo": "brevkoll", "issue": 7, "checkpoint": "after_research_questions", "answer": "go", "wait_min": 83.9, "comment_id": 1171}

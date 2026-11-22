@@ -155,3 +155,23 @@ class ChecksTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RefusedRunTests(unittest.TestCase):
+    def test_a_refused_run_leaves_nothing_behind_for_the_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wt = Path(tmp)
+            env = {**os.environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@x", "GIT_COMMITTER_NAME": "a",
+                   "GIT_COMMITTER_EMAIL": "a@x"}
+            subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True)
+            (wt / "a").write_text("1")
+            subprocess.run(["git", "add", "-A"], cwd=wt, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=wt, check=True, env=env)
+            base = dispatch.run("git", "rev-parse", "HEAD", cwd=wt)
+            (wt / "a").write_text("2")
+            subprocess.run(["git", "commit", "-q", "-am", "agent"], cwd=wt, check=True, env=env)
+            (wt / "scratch.py").write_text("x")
+            keep = dispatch.keep_refused(wt, "agent/issue-29", base)
+            self.assertEqual(dispatch.run("git", "rev-parse", "HEAD", cwd=wt), base)
+            self.assertFalse((wt / "scratch.py").exists())
+            self.assertIn(keep, dispatch.run("git", "branch", cwd=wt))

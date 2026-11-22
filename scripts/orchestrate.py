@@ -626,6 +626,9 @@ def after_timebox(ctx: Ctx) -> None:
     build(ctx)
 
 
+CI_EACH_PHASE = os.environ.get("FACTORY_CI_EACH_PHASE", "off")  # on: wait for CI after every phase, as before
+
+
 def build(ctx: Ctx) -> None:
     st = ctx.state()
     if "build_start" not in st:
@@ -648,11 +651,16 @@ def build(ctx: Ctx) -> None:
             ctx.comment(f"{CLAIM_PREFIX} Timebox warning: {hours:.1f} h of {TIMEBOX_H:g} h used, "
                         f"{st.get('phases_done', 0)} of {n_ph} phases done.")
             notify(f"{ctx.app}: timebox 80%", f"{hours:.1f} h of {TIMEBOX_H:g} h used", priority=4)
-        dispatch(ctx, "implement")
+        out = dispatch(ctx, "implement")
         # Count the phase as soon as its commit exists. If CI is red and the rework run fails, a retry must not
         # dispatch another implement run for a phase that is already built (it would make no commit and fail).
         st["phases_done"] = st.get("phases_done", 0) + 1
         ctx.save(st)
+        if "LOCAL_CHECKS=pass" in (out or "") and st["phases_done"] < n_ph and CI_EACH_PHASE == "off":
+            # The same checks just passed on this commit locally: start the next phase now. CI still runs on every
+            # push, and the foreman waits for it after the last phase, where a red result gets the usual rework.
+            log(f"{ctx.app}#{ctx.n}: phase {st['phases_done']} passed its checks locally; next phase without waiting for CI")
+            continue
         want = ("checks", "gates", "security")
         res = ci_wait(ctx, want)
         if failing(res, want):

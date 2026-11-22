@@ -60,7 +60,7 @@ class PageTests(unittest.TestCase):
         page = board.render([c], [("foreman", "idle", "ok")], stats, ["12:00 <x>"], NOW, "host")
         self.assertIn("A change &lt;b&gt;", page)
         self.assertNotIn("<b>\n", page)
-        self.assertIn("http-equiv='refresh' content='60'", page)
+        self.assertIn("location.reload()},60000)", page)  # keeps scroll and open panels (no meta refresh)
         self.assertNotIn("http://", page.replace("https://git", ""))  # nothing loaded from outside
 
     def test_analytics_split_typed_default_and_auto_minutes(self) -> None:

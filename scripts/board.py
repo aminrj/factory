@@ -100,7 +100,7 @@ def card(issue: dict, repo: str, base_url: str, view: dict | None, runs: list[di
     elif view and view.get("stale") and col == "blocked":
         why = "the last step stopped without posting a checkpoint (no process runs it); see the issue"
     elif col == "inbox":
-        who, why = "nobody yet", "no checkpoint: start it with new_change.py, or label it for the night shift"
+        who, why = "nobody yet", "not started: comment /go on the issue to start it"
     elif col == "done":
         who, why, since = "", "closed", issue.get("closed_at") or ""
     mine = [r for r in runs if r.get("repo") == app and r.get("issue") == n]
@@ -172,9 +172,18 @@ def esc(x: object) -> str:
 
 
 CSS = """
-.live .act{font-weight:600;margin:.3em 0}.live ul.todo{margin:.3em 0;padding-left:1.1em;list-style:none}
-.live ul.todo li{margin:.1em 0}.live .files{font-size:.85em;opacity:.85;word-break:break-all}
-.live pre{white-space:pre-wrap;font-size:.8em;max-height:16em;overflow:auto}
+#live{margin:0 16px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card,var(--bg))}
+#live>summary{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;cursor:pointer;font-weight:600}
+#live>summary::-webkit-details-marker{display:none}#livebody{padding:0 12px 10px}
+#dock{font:inherit;font-size:12px;border:1px solid var(--line);border-radius:4px;background:none;color:inherit;padding:2px 8px}
+.lcard{border-top:1px solid var(--line);padding:8px 0}.lcard .k{font-size:13px}
+.lcard .act{font-weight:600;margin:.3em 0}.lcard ul.todo{margin:.3em 0;padding-left:1.1em;list-style:none}
+.lcard ul.todo li{margin:.1em 0}.lcard .files{font-size:.85em;opacity:.85;word-break:break-all}
+.lcard pre{white-space:pre-wrap;font-size:.8em;max-height:18em;overflow:auto}
+@media (min-width:900px){body.docked{padding-right:416px}
+body.docked #live{position:fixed;top:0;right:0;bottom:0;width:400px;margin:0;border-radius:0;border-width:0 0 0 1px;
+overflow:auto;z-index:5}body.docked #live pre{max-height:none}}
+@media (max-width:899px){body.docked{padding-bottom:48vh}body.docked #live{position:fixed;left:0;right:0;bottom:0;margin:0;border-radius:12px 12px 0 0;max-height:46vh;overflow:auto;z-index:6;box-shadow:0 -4px 16px rgba(0,0,0,.25)}}
 :root{--bg:#0f172a;--panel:#1e293b;--card:#273449;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;
 --ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--you:#c084fc}
 @media (prefers-color-scheme: light){:root{--bg:#f1f5f9;--panel:#fff;--card:#f8fafc;--line:#cbd5e1;--text:#0f172a;
@@ -216,10 +225,9 @@ border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:p
 """
 
 GATES = """<table><tr><th>CP</th><th>What waits for you</th><th>What you decide</th><th>After your /go</th></tr>
-<tr><td>1 spec</td><td>spec.md + holdout tests</td><td>Right change, right tests? Approve the spec</td><td>threat model drafted</td></tr>
-<tr><td>2 threat model</td><td>threat-model.md</td><td>Each PROPOSED row: accept, change or reject</td><td>research</td></tr>
-<tr><td>2b questions</td><td>open questions (only if any)</td><td>Answer in a comment, or /go without</td><td>plan</td></tr>
-<tr><td>3 plan</td><td>plan.md</td><td>Approve, or /rework &lt;what to change&gt;</td><td>build: phases, CI, validation, staging</td></tr>
+<tr><td>start</td><td>a new issue</td><td>/go starts it</td><td>spec and acceptance tests drafted</td></tr>
+<tr><td>1 spec</td><td>spec.md + holdout tests</td><td>Right change, right tests? /go approves</td><td>threat model, research and plan, back to back</td></tr>
+<tr><td>3 plan</td><td>plan.md + threat model + open questions</td><td>/go builds it, or /rework &lt;what to change&gt;</td><td>build: phases with local checks and self-fix, CI, validation, staging</td></tr>
 <tr><td>4 review</td><td>PR (checks green) + staged build</td><td>Try it, read the diff, merge; or /rework</td><td>/go after the merge: mirror, staging removed</td></tr>
 <tr><td>4b</td><td>merged and mirrored</td><td>/go closes the item (release is manual for now)</td><td>closed</td></tr></table>
 <p class="muted">Suffixes: <b>-retry</b> a step failed (budget 2) · <b>-blocked</b> model, credit or login (no retry spent) ·
@@ -228,21 +236,47 @@ GATES = """<table><tr><th>CP</th><th>What waits for you</th><th>What you decide<
 <code>/stop</code>. Label <code>night/ok</code>: the night shift passes CP1 to CP3 on the local model and stops at CP4.</p>"""
 
 LIVE_JS = """
-(function(){var box=document.getElementById('live'),body=document.getElementById('livebody');
+(function(){
+var body=document.getElementById('livebody'),cnt=document.getElementById('livecnt'),dock=document.getElementById('dock');
+function load(k,d){try{return JSON.parse(localStorage.getItem(k))||d}catch(x){return d}}
+function save(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(x){}}
+// every <details data-k> keeps its open/closed state on this device, across redraws and reloads
+var open=load('fb-open',{});
+function keep(root){[].forEach.call(root.querySelectorAll('details[data-k]'),function(d){
+if(d.dataset.k in open)d.open=open[d.dataset.k];if(d._kept)return;d._kept=1;
+d.addEventListener('toggle',function(){open[d.dataset.k]=d.open;save('fb-open',open)})})}
+keep(document);
+// dock the live panel beside the board (wide screens) or keep it pinned on top (phones)
+function setDock(on){document.body.classList.toggle('docked',on);dock.textContent=on?'undock ⇤':'dock ⇥';save('fb-dock',on)}
+setDock(location.hash==='#dock'||!!load('fb-dock',false));  // a bookmark with #dock always docks
+dock.addEventListener('click',function(ev){ev.preventDefault();ev.stopPropagation();
+setDock(!document.body.classList.contains('docked'))});
 function e(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML}
 function mins(s){var m=Math.floor((Date.now()/1000-s)/60);return m<1?'<1 min':m+' min'}
-function draw(j){var items=(j&&j.items)||[];box.hidden=!items.length;body.innerHTML=items.map(function(it){
 var icon={completed:'✅',in_progress:'▶️',pending:'⬜'};
+function draw(j){var items=(j&&j.items)||[];cnt.textContent=items.length;
+var scroll={};[].forEach.call(body.querySelectorAll('pre[data-k]'),function(p){scroll[p.dataset.k]=[p.scrollTop,
+p.scrollHeight-p.scrollTop-p.clientHeight<8]});
+body.innerHTML=items.length?items.map(function(it){var k=e(it.app)+'-'+e(it.n);
 var todos=(it.todos||[]).map(function(t){return '<li>'+(icon[t.status]||'⬜')+' '+e(t.text)+'</li>'}).join('');
-var files=(it.files||[]).slice(-8).map(function(f){return '<code>'+e(f)+'</code>'}).join(' ');
-return "<div class='card live'><div class='k'><b>"+e(it.app)+'#'+e(it.n)+'</b> · '+e(it.step)+' · '+e(it.model)+
+var files=(it.files||[]).slice(-10).map(function(f){return '<code>'+e(f)+'</code>'}).join(' ');
+return "<div class='lcard'><div class='k'><b>"+e(it.app)+'#'+e(it.n)+'</b> · '+e(it.step)+' · '+e(it.model)+
 ' · '+mins(it.started)+' · turn '+e(it.turns)+(it.round>1?' · self-fix round '+(it.round-1):'')+'</div>'+
-"<div class='act'>"+e(it.action)+'</div>'+(todos?'<ul class=todo>'+todos+'</ul>':'')+
+"<div class='act'>"+e(it.action)+'</div>'+(todos?'<ul class=todo>'+todos+'</ul>':"<div class='files'>no task list yet</div>")+
 (files?"<div class='files'>files: "+files+'</div>':'')+
-"<details><summary>recent output</summary><pre>"+e((it.recent||[]).join('\\n'))+'</pre>'+
-"<a href='live/"+e(it.app)+'-'+e(it.n)+".log' target='_blank'>full log</a></details></div>"}).join('')}
+"<details data-k='live-out-"+k+"'><summary>recent output</summary><pre data-k='"+k+"'>"+
+e((it.recent||[]).join('\\n'))+"</pre><a href='live/"+k+".log' target='_blank'>full log</a></details></div>"}).join('')
+:"<div class='empty'>No agent is running. <a href='live/' target='_blank'>last logs</a></div>";
+keep(body);
+[].forEach.call(body.querySelectorAll('pre[data-k]'),function(p){var s=scroll[p.dataset.k];
+p.scrollTop=(!s||s[1])?p.scrollHeight:s[0]})}
 function tick(){fetch('live/index.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null}).then(draw)
-.catch(function(){})}tick();setInterval(tick,4000)})();
+.catch(function(){})}tick();setInterval(tick,4000);
+// the board itself: reload every minute, keeping the scroll position; not while you type in the filter
+try{var y=sessionStorage.getItem('fb-y');if(y!==null){window.scrollTo(0,+y);sessionStorage.removeItem('fb-y')}}catch(x){}
+setInterval(function(){var a=document.activeElement;if(a&&a.id==='q'&&a.value)return;
+try{sessionStorage.setItem('fb-y',window.scrollY)}catch(x){}location.reload()},60000);
+})();
 """
 
 JS = """
@@ -312,7 +346,7 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
     apps = sorted({c["app"] for c in cards})
     out = ["<!doctype html><html lang='en'><head><meta charset='utf-8'>",
            "<meta name='viewport' content='width=device-width, initial-scale=1'>",
-           "<meta http-equiv='refresh' content='60'><title>Factory board</title>", f"<style>{CSS}</style></head><body>",
+           "<title>Factory board</title>", f"<style>{CSS}</style></head><body>",
            f"<header><h1>Factory board</h1><small>updated {now.strftime('%H:%M')} UTC on {esc(host)} · every minute · "
            "read-only</small></header>",
            "<div class='bar'><input id='q' type='search' placeholder='Filter: issue, title, step…' aria-label='filter'>",
@@ -328,9 +362,11 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
         out.append(f"<span class='pill'>{esc(name)}: <b class='{level}'>{esc(value)}</b></span>")
     out.append("</div>")
     # Live: what each running agent does right now (scripts/live.py writes live/index.json; refreshed every 4 s)
-    out.append("<section id='live' hidden><h2>🔧 Working now</h2><div id='livebody'></div></section>")
+    out.append("<details id='live' data-k='live' open><summary><span>🔧 Working now <b id='livecnt'>0</b></span>"
+               "<button id='dock' type='button' title='Keep this panel open beside the board'>dock ⇥</button></summary>"
+               "<div id='livebody'><div class='empty'>No agent is running.</div></div></details>")
     if busy or queued:
-        out.append("<section><details open><summary>⏳ What the foreman is doing, and what waits</summary>")
+        out.append("<section><details data-k='sec-busy' open><summary>⏳ What the foreman is doing, and what waits</summary>")
         if busy:
             out.append(f"<p>{esc(busy)}</p>")
         if queued:
@@ -340,11 +376,11 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
         out.append("</details></section>")
     out.append("<div class='board'>")
     for key in order:
-        out.append(f"<details class='col' data-col='{key}' open><summary><span>{esc(titles[key])}</span>"
+        out.append(f"<details class='col' data-col='{key}' data-k='col-{key}' open><summary><span>{esc(titles[key])}</span>"
                    f"<span class='cnt'>{len(cols[key])}</span></summary>")
         out += [_card_html(c) for c in cols[key]] or ["<div class='empty'>nothing</div>"]
         out.append("</details>")
-    out.append("<details class='col' data-col='archived'><summary><span>Archived (this device)</span>"
+    out.append("<details class='col' data-col='archived' data-k='col-archived'><summary><span>Archived (this device)</span>"
                "<span class='cnt'>0</span></summary><div class='empty'>Done items you archive land here; "
                "“restore” puts them back. Nothing changes on the issue.</div></details>")
     out.append("</div>")

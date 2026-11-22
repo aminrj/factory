@@ -316,6 +316,26 @@ class GateTests(unittest.TestCase):
         self.commit_file("plan.md", PLAN.replace("draft", "approved"), email=WEB_EDITOR)
         self.checkpoint("after_gate3", "3")
 
+    def test_a_phase_that_passed_its_checks_locally_does_not_wait_for_ci(self) -> None:
+        def counted(with_marker: bool) -> int:
+            waits: list[tuple] = []
+            real = self.fake_dispatch
+
+            def fake(ctx, step, note=None, note_kind="ci"):  # noqa: ANN001, ANN202
+                real(ctx, step, note, note_kind)
+                return "ok: implement pushed LOCAL_CHECKS=pass" if with_marker and step == "implement" else ""
+
+            with mock.patch.object(orchestrate, "dispatch", side_effect=fake), \
+                 mock.patch.object(orchestrate, "ci_wait", side_effect=lambda ctx, want: waits.append(want) or
+                                   {w: "success" for w in want}):
+                self.prepare_build()
+                self.go()
+            return sum(1 for w in waits if w == ("checks", "gates", "security"))
+
+        self.assertEqual(counted(False), 2)  # one wait per phase
+        self.setUp()
+        self.assertEqual(counted(True), 1)  # only after the last phase
+
     def test_build_runs_every_phase_then_validates_and_stages_for_review(self) -> None:
         self.prepare_build()
         self.assertEqual(self.go(), "ran after_gate3")

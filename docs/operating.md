@@ -74,14 +74,18 @@ on another item runs in parallel with a local step.
   app's checks locally (`.factory/checks` in the app repo, one command per line; otherwise what its CI runs: ruff,
   pyright, pytest, the holdout tests, `scripts/check-tests-fail-before-patch.sh`, `scripts/quality.sh`). A check that
   fails goes back to **the same agent session** at once, up to 2 rounds (`FACTORY_SELF_FIX_ROUNDS`). A check that was
-  already red before the run is reported, not handed to the agent. CI then confirms instead of debugging.
+  already red before the run is reported, not handed to the agent. CI then confirms instead of debugging: a phase
+  whose checks passed locally starts the next phase at once, and the foreman waits for CI only after the last phase
+  (`FACTORY_CI_EACH_PHASE=on` waits after every phase, as before).
 - **The spec step cleans up after itself.** Files outside `thoughts/N/` and `tests/holdout/` are put back, stray NUL
   bytes are removed, and the acceptance tests must load before Checkpoint 1 is posted.
 
 ## Where to look
 
 - **Working now** (top of the board): each running agent's step, model, minutes, turns, what it is doing this second,
-  its task list, the files it touched, its recent output and a link to the full log. Refreshed every 4 seconds.
+  its task list, the files it touched, its recent output and a link to the full log. Refreshed every 4 seconds; panels
+  you open or close stay that way. **dock ⇥** keeps it beside the board on a wide screen and as a bottom sheet on a
+  phone (remembered per device; a bookmark ending in `#dock` always docks).
 
 - **The board** (the devbox, port 8801): a kanban with the columns Your turn, Review, Blocked, Agent working, Inbox, Done
   and Archived; a filter bar; the commands waiting and why; the failures by kind; 7-day numbers; what the checkpoints
