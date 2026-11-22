@@ -1,18 +1,18 @@
 # Board
 
-_Generated 2026-11-22 06:17 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 06:25 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| (nothing) | | | |
+| brevkoll#19 | 4b: merged and mirrored; the release is not automated yet | 2026-11-22T06:17+00:00 | 0.1 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
 
 ## spec-ready
 
