@@ -1,24 +1,25 @@
 # Board
 
-_Generated 2026-11-22 12:33 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 12:34 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | 1: spec and holdout tests (drafted by the factory) | 2026-11-22T12:24+00:00 | 0.1 |
+| brevkoll#26 | 3: approve the plan or send it back | 2026-11-22T12:33+00:00 | 0.0 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| Chunked uploads without Content-Length are only rejected after parsing | brevkoll#7 |
+| (none) | |
 
 ## spec-ready
 
 | Item | Issue |
 |---|---|
 | Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
+| Chunked uploads without Content-Length are only rejected after parsing | brevkoll#7 |
 
 ## building
 
