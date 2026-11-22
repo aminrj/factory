@@ -80,6 +80,10 @@ class AgentDeclined(NeedsHuman):
         self.step = step
 
 
+class GateEvasion(NeedsHuman):
+    """dispatch.py refused to push a run that hid tests from a gate. A retry would try the same trick."""
+
+
 class Stop(Exception):
     pass
 
@@ -347,6 +351,8 @@ def dispatch(ctx: Ctx, step: str, note: str | None = None, note_kind: str = "ci"
     out = (res.stdout + res.stderr).strip()
     if res.returncode == DECLINED_EXIT:
         raise AgentDeclined(step, out)
+    if res.returncode == EVASION_EXIT:
+        raise GateEvasion(out[-3000:])
     if res.returncode != 0:
         raise StepFailed(f"`{step}` failed:\n{out[-1500:]}")
     log(f"{ctx.app}#{ctx.n}: dispatch {step}: {out.splitlines()[-1] if out else 'ok'}")
@@ -354,6 +360,7 @@ def dispatch(ctx: Ctx, step: str, note: str | None = None, note_kind: str = "ci"
 
 
 DECLINED_EXIT = 3  # keep in step with dispatch.py
+EVASION_EXIT = 4  # keep in step with dispatch.py
 FAILURE_CLASS = re.compile(r"\[class: (\w+)\]")  # written by dispatch.py
 CONTEXTS = ("checks", "gates", "security", "holdout")
 

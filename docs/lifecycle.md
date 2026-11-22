@@ -21,8 +21,8 @@ spec pasted ─▶ CP1 spec ─▶ CP2 threat model ─▶ CP3 plan ─▶ build
 | 3 | **CP3 plan** | An agent writes the plan in phases. | approve or `/rework` | works |
 | 4 | **Build and test** | One agent run per phase, CI after each on the runner, retries; then a validation report. | nothing | works |
 | 5 | **CP4 review on staging** | The pull request's head runs **as a container on the devbox**; the checkpoint links it (phone and PC). | try it, read the diff, merge, or `/rework` | works |
-| 6 | **Release candidate** | After your merge: the foreman builds the image from `main` on the devbox, scans it (vulnerabilities, SBOM), tags it `v<date>.<n>` and pushes it to the Gitea container registry. It then runs **that exact image** as a container on the devbox, the same image that would go to production. | nothing | planned |
-| 7 | **CP5 accept the release** | The checkpoint links the candidate on the devbox, the scan summary and what changed since the last release. | try it; `/go` accepts it, `/rework <what>` sends it back | planned |
+| 6 | **Release candidate** | After your merge: the foreman builds the image from `main` on the devbox, scans it (vulnerabilities, SBOM), tags it `v<date>.<n>` and pushes it to the Gitea container registry. It then runs **that exact image** as a container on the devbox, the same image that would go to production. | nothing | built (factory#84) |
+| 7 | **CP5 accept the release** | The checkpoint links the candidate on the devbox, the scan summary and what changed since the last release. | try it; `/go` accepts it, `/rework <what>` sends it back | built (factory#84) |
 | 8 | **Deploy** | Only after CP5: the foreman opens a pull request in the GitOps repo. The first time, it is the app's overlay (namespace, host name, NetworkPolicy, ExternalSecret, the Argo CD application); later releases only change the image tag. The app's secrets are written to Key Vault by the factory. | merge the GitOps PR: **that merge is the deploy** | planned |
 | 9 | **CP6 live** | Argo CD syncs. The foreman watches the rollout (pods ready, no restarts for 10 minutes) and runs a smoke test against `https://<app>.<apps domain>/`. If it fails, a revert PR is ready. | nothing, or merge the revert | planned |
 | 10 | **Assess** | After 7 and 14 days a read-only review of the shipped code opens issues for what it finds (`scripts/lookback.py`); the board shows lead time from spec to production. | read the findings | review exists, timers not installed |
@@ -53,5 +53,6 @@ night shift passes CP1 to CP3 for you (see [night-shift.md](night-shift.md)); CP
 3. `scripts/new_app.py <app> "<one-line description>" --seed <folder with thoughts/1/spec.md and tests/holdout/>`.
 4. Answer the checkpoints on the issue from your phone, and follow the item on the board.
 
-Releases and deploys are manual until stages 6 to 9 land: a session builds and pushes the image, and you merge the
-GitOps PR it opens.
+Until stages 8 and 9 land, the deploy is manual: after CP5 a session opens the GitOps PR and you merge it.
+
+Day-to-day commands, lanes, the local model, the board and the two hosts: [operating.md](operating.md).

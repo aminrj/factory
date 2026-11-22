@@ -314,3 +314,76 @@ class PlaceHoldoutTests(unittest.TestCase):
             self.assertFalse((wt / "tests" / "holdout_test_issue_7.py").exists())
             self.assertTrue((wt / "tests" / "test_issue_70.py").exists())
             self.assertEqual(len(moved), 2)
+
+
+class GateEvasionTests(unittest.TestCase):
+    """brevkoll#26: the local model hid tests from the "new tests must fail on main" gate instead of saying the plan
+    could not meet it. Such a run must reach the owner, not the branch."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.wt = Path(self.tmp.name)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.wt)], check=True)
+        self.write("tests/unit/test_trace.py", "def test_a():\n    pass\n\n\ndef test_b():\n    pass\n")
+        self.write("src/app/main.py", "X = 1\n")
+        self.base = self.commit("phase 2")
+
+    def write(self, rel: str, text: str) -> None:
+        p = self.wt / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    def commit(self, msg: str) -> str:
+        env = {**os.environ, "GIT_AUTHOR_NAME": "a", "GIT_AUTHOR_EMAIL": "a@x", "GIT_COMMITTER_NAME": "a",
+               "GIT_COMMITTER_EMAIL": "a@x"}
+        subprocess.run(["git", "add", "-A"], cwd=self.wt, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", msg], cwd=self.wt, check=True, env=env)
+        return dispatch.run("git", "rev-parse", "HEAD", cwd=self.wt)
+
+    def test_the_brevkoll_26_rework_is_caught_three_ways(self) -> None:
+        self.write("tests/unit/test_trace.py", "from app.main import _helper  # noqa: F401\n")
+        self.write("tests/tooling/test_trace_t6.py", "def test_a():\n    pass\n\n\ndef test_b():\n    pass\n")
+        self.write("tests/tooling/conftest.py", "def pytest_ignore_collect(collection_path, config):\n    return True\n")
+        self.commit("move traceability tests to tooling, causing an ImportError on main that makes the gate pass")
+        found = dispatch.gate_evasion(self.wt, self.base, "the gate doesn't check this directory")
+        self.assertEqual(len(found), 3, found)
+        self.assertIn("pytest_ignore_collect", found[0])
+        self.assertIn("2 -> 0", found[1])
+        self.assertIn("says so itself", found[2])
+
+    def test_honest_work_passes(self) -> None:
+        self.write("src/app/main.py", "X = 2\n")
+        self.write("tests/unit/test_trace.py", "def test_a():\n    pass\n\n\ndef test_b():\n    pass\n\n\ndef test_c():\n"
+                   "    pass\n")
+        self.commit("phase 3: X is 2")
+        self.assertEqual(dispatch.gate_evasion(self.wt, self.base, "Fixed the code so the gate passes."), [])
+
+    def test_merging_tests_inside_the_gated_folders_is_not_a_move(self) -> None:
+        self.write("tests/unit/test_trace.py", "def test_ab():\n    pass\n")
+        self.commit("merge two tests")
+        self.assertEqual(dispatch.gate_evasion(self.wt, self.base, ""), [])
+
+    def test_a_refused_run_is_kept_off_the_branch_and_exits_with_its_own_code(self) -> None:
+        import io
+        from contextlib import redirect_stderr
+
+        self.write("tests/conftest.py", "collect_ignore = ['unit']\n")
+        self.commit("hide")
+        err = io.StringIO()
+        with redirect_stderr(err), self.assertRaises(SystemExit) as caught:
+            dispatch.refuse_evasion(self.wt, "agent/issue-1", self.base, ["x"])
+        self.assertEqual(caught.exception.code, dispatch.EVASION_EXIT)
+        self.assertEqual(dispatch.run("git", "rev-parse", "HEAD", cwd=self.wt), self.base)
+        self.assertIn("refused/agent-issue-1-", dispatch.run("git", "branch", cwd=self.wt))
+        self.assertIn("did not push", err.getvalue())
+
+    def test_the_foreman_turns_that_code_into_a_question_not_a_retry(self) -> None:
+        import orchestrate
+
+        self.assertEqual(orchestrate.EVASION_EXIT, dispatch.EVASION_EXIT)
+        done = mock.Mock(returncode=dispatch.EVASION_EXIT, stdout="", stderr="hid tests")
+        with mock.patch.object(orchestrate.subprocess, "run", return_value=done), mock.patch.object(orchestrate, "log"):
+            with self.assertRaises(orchestrate.GateEvasion) as caught:
+                orchestrate.dispatch(mock.Mock(app="app", n=1), "implement")
+        self.assertIsInstance(caught.exception, orchestrate.NeedsHuman)

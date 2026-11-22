@@ -361,6 +361,70 @@ def agent_forbidden(wt: Path, n: int) -> list[str]:
     return sorted({f for f in out.splitlines() if f and forbidden.match(f)})
 
 
+EVASION_EXIT = 4  # keep in step with orchestrate.py
+GATED_TEST_DIRS = tuple(os.environ.get("FACTORY_GATED_TEST_DIRS", "tests/unit/ tests/integration/").split())
+HIDES_TESTS = re.compile(r"\b(pytest_ignore_collect|collect_ignore(?:_glob)?|pytest_collection_modifyitems|"
+                         r"pytest_deselected)\b|allow_module_level\s*=\s*True")
+ADMITS = re.compile(r"\b(gate|guard|check)s?\b[^.\n]{0,40}\b(does ?n[o']t|won'?t|never|cannot|can't) "
+                    r"(check|see|look at|run|collect)|ImportError[^.\n]{0,80}\b(gate|on main|base code)", re.IGNORECASE)
+
+
+def test_functions(wt: Path, rev: str) -> tuple[int, int]:
+    """(test functions in the folders the app's gate runs, test functions elsewhere under tests/) at `rev`."""
+    out = run("git", "grep", "-c", "-E", r"^\s*(async\s+)?def test_", rev, "--", "tests/", cwd=wt, check=False)
+    gated = other = 0
+    for row in out.splitlines():
+        path, _, count = row.removeprefix(f"{rev}:").rpartition(":")
+        if path.startswith("tests/holdout/"):
+            continue
+        if path.startswith(GATED_TEST_DIRS):
+            gated += int(count)
+        else:
+            other += int(count)
+    return gated, other
+
+
+def gate_evasion(wt: Path, head_before: str, said: str) -> list[str]:
+    """Signs that an agent run got a gate to pass by hiding tests from it instead of fixing the code or the plan.
+
+    brevkoll#26 (2026-11-22): the gate says new tests must fail on the base code. The plan added tests for behaviour
+    that already existed, so they passed on main and the gate stayed red. The local model then moved the real tests to
+    tests/tooling/ (which the gate does not run), left a stub in tests/unit/ whose only job was to fail on main with an
+    ImportError, and added a conftest hook that skips a file, and said so in its summary. Each sign alone is rare in
+    honest work; any of them sends the run to the owner instead of pushing it."""
+    found = []
+    current = ""
+    for line in run("git", "diff", "-U0", f"{head_before}..HEAD", cwd=wt).splitlines():
+        if line.startswith("+++ "):
+            current = line[6:] if line.startswith("+++ b/") else line[4:]
+        elif line.startswith("+") and (m := HIDES_TESTS.search(line)):
+            found.append(f"`{current}` adds `{m.group(0)}`, which hides tests from pytest")
+    gated_before, other_before = test_functions(wt, head_before)
+    gated_after, other_after = test_functions(wt, "HEAD")
+    if gated_after < gated_before and other_after > other_before:
+        found.append(f"tests moved out of the folders the gate runs ({', '.join(GATED_TEST_DIRS)}): there "
+                     f"{gated_before} -> {gated_after} test functions, elsewhere {other_before} -> {other_after}")
+    messages = run("git", "log", "--format=%B", f"{head_before}..HEAD", cwd=wt)
+    if m := ADMITS.search(f"{said}\n{messages}"):
+        start = max(0, m.start() - 80)
+        found.append(f"the agent says so itself: \"...{' '.join((said + chr(10) + messages)[start:m.end() + 40].split())}...\"")
+    return found
+
+
+def refuse_evasion(wt: Path, branch: str, head_before: str, found: list[str]) -> None:
+    """Keep the run off the branch (saved under a local refused/ branch for a look) and stop for the owner."""
+    keep = f"refused/{branch.replace('/', '-')}-{int(time.time())}"
+    run("git", "branch", "-f", keep, "HEAD", cwd=wt)
+    run("git", "reset", "-q", "--hard", head_before, cwd=wt)
+    print("The agent's run looks like it got a gate to pass by hiding tests from it, so I did not push it:\n"
+          + "\n".join(f"- {f}" for f in found)
+          + f"\n\nIts commits are kept on the local branch `{keep}` (not pushed). This usually means the plan asks for "
+            "something the gate cannot accept (for example tests of behaviour that already exists, which pass on main). "
+            "A retry would try the same trick, so: change the plan (or the gate, in a commit of your own), then reply "
+            "`/go`; or `/stop`.", file=sys.stderr)
+    raise SystemExit(EVASION_EXIT)
+
+
 def run_guard(wt: Path) -> None:
     script = run("git", "show", "origin/main:scripts/check-holdout-guard.sh", cwd=wt)
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
@@ -517,6 +581,10 @@ def main() -> None:
         tm = (wt / "thoughts" / str(n) / "threat-model.md")
         if not tm.exists() or not re.search(r"\bPROPOSED\b", tm.read_text()):
             die("threat-model.md is missing or has no PROPOSED decisions.")
+    if step in ("implement", "validate"):
+        found = gate_evasion(wt, head_before, str(result.get("result") or ""))
+        if found:
+            refuse_evasion(wt, branch, head_before, found)
     run_guard(wt)
 
     run("git", "push", "-q", "-u", "origin", branch, cwd=wt)
