@@ -1,12 +1,13 @@
 # Board
 
-_Generated 2026-11-22 16:31 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 16:32 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
 | brevkoll#29 | 2: threat model, you decide every row | 2026-11-22T16:20+00:00 | 0.2 |
+| brevkoll#14 | pick_up-retry: a step failed | 2026-11-22T16:31+00:00 | 0.0 |
 
 ## idea
 
