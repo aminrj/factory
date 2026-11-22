@@ -8,8 +8,8 @@ runs a build for half an hour cannot update anything or answer anyone, and silen
 1. rewrites the body of one pinned issue, "Factory status", in the factory repo: the host and the tick, the step running
    now, what waits for the owner, staged builds, the GitHub mirrors, today's spend and the last log lines;
 2. answers a command at once when the foreman cannot act on it right away, saying what will happen to it:
-   - sent to the issue whose step is running: it will not run (the issue moves to a new checkpoint first); `/stop` is
-     heard between two phases;
+   - sent to the issue whose step is running: it will not run (the issue moves to a new checkpoint first); `/stop`
+     ends the running step within seconds and `/steer <note>` is handed to the running agent (scripts/signals.py);
    - sent to another issue while a tick is busy: it runs when that tick is done;
    - sent to a closed issue: it never runs (the foreman reads open issues only);
 3. publishes the factory's own repos (factory, factory-template) to their GitHub mirrors when main moved, through the
@@ -38,6 +38,7 @@ import mirror  # noqa: E402
 import board  # noqa: E402
 import commands  # noqa: E402
 import lanes  # noqa: E402
+import signals  # noqa: E402
 import lease  # noqa: E402
 import orchestrate as o  # noqa: E402
 from gitea import Gitea, Unreachable, by_owner, ours  # noqa: E402
@@ -110,7 +111,8 @@ def issue_view(g: Gitea, repo: str, n: int) -> dict:
     # hours after an old reply was posted as a claim)
     alive = claimed and (o.item_is_running(app, n) or lanes.item_running(o.STATE, app, n))
     return {"repo": repo, "n": n, "app": app, "pivot": pivot, "running": alive, "stale": claimed and not alive,
-            "pending": [c for c in owner if c["id"] > after and o.is_command(c["body"])]}
+            "pending": [c for c in owner if c["id"] > after and o.is_command(c["body"])],
+            "steers": [c for c in owner if c["id"] > after and o.STEER.match(c["body"])]}
 
 
 def first_line(body: str, limit: int = 110) -> str:
@@ -132,13 +134,16 @@ def ack_text(view: dict, cmd: dict, tick_s: int | None, running: dict | None) ->
     word = first_line(cmd["body"], 60)
     if view["running"]:
         if o.STOP.match(cmd["body"]):
-            return (f"{o.NOTICE_PREFIX} Received `{word}` while a step of this issue is running. The foreman hears it "
-                    "between two phases and stops cleanly then; a single step is not cut off midway.")
+            # the running step watches for this file and ends within seconds (scripts/signals.py, dispatch.py)
+            signals.request_stop(o.STATE, view["app"], view["n"], cmd["id"])
+            return (f"{o.NOTICE_PREFIX} Received `{word}`: the running step is being ended now (within seconds). Its "
+                    "unfinished work is kept on a local branch, nothing is pushed, and a checkpoint follows where you "
+                    "choose: `/go` again, `/go model=fast`, or `/stop` to end the item.")
         step = f"`{running['step']}`" if running else "a step"
         return (f"{o.NOTICE_PREFIX} Received `{word}`, but {step} of this issue is running now. When it ends the issue "
                 "moves to a new checkpoint, and this command will not run there (the same words can mean something "
-                "else at the next checkpoint). Answer that checkpoint when it appears; `/stop` ends the run between two "
-                "phases.")
+                "else at the next checkpoint). Answer that checkpoint when it appears. To act now: `/steer <note>` gives the "
+                "running agent a direction, `/stop` ends the step.")
     if view.get("pivot") and o.parse_marker(view["pivot"]["body"]).get("resume") == "manual":
         return None  # nothing will start: the tick answers at once that a session is needed
     if lanes.enabled() and (o.GO.match(cmd["body"]) or o.REWORK.match(cmd["body"])):
@@ -155,6 +160,36 @@ def ack_text(view: dict, cmd: dict, tick_s: int | None, running: dict | None) ->
         return (f"{o.NOTICE_PREFIX} Received `{word}`. The foreman is busy with {running['app']}#{running['n']} "
                 f"(`{running['step']}`, {tick_s // 60} min so far) and acts on this right after it. Nothing to resend.")
     return None
+
+
+def answer_steers(g: Gitea, views: list[dict]) -> list[str]:
+    """`/steer <note>`: handed to the step running now (it gets it within seconds and continues with it), or one reply
+    saying why not. 2026-11-22: the owner watched a run go the wrong way on the board and could only wait or stop it."""
+    path = state_file("acked.json")
+    acked = set(json.loads(path.read_text())) if path.exists() else set()
+    posted = []
+    for v in views:
+        for c in v.get("steers", []):
+            key = f"{v['repo']}#{c['id']}"
+            if key in acked:
+                continue
+            note = o.STEER.match(c["body"]).group(1).strip()  # type: ignore[union-attr]
+            if not note:
+                text = f"{o.NOTICE_PREFIX} `/steer` needs a note: `/steer <what the agent should do differently>`."
+            elif v["running"]:
+                signals.add_steer(o.STATE, v["app"], v["n"], c["id"], note[:2000])
+                text = (f"{o.NOTICE_PREFIX} Passed to the running agent: it is interrupted within seconds, reads your "
+                        "note and continues the same session with it. Its reply shows on the board.")
+            else:
+                text = (f"{o.NOTICE_PREFIX} Nothing of this issue is running, so there is no agent to steer. At a "
+                        "checkpoint, write your direction in a comment and reply `/go`, or `/rework <note>` at the plan "
+                        "or review checkpoint.")
+            g.comment(v["repo"], v["n"], text)
+            acked.add(key)
+            posted.append(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(sorted(acked)[-500:]))
+    return posted
 
 
 def answer_commands(g: Gitea, views: list[dict], tick_s: int | None, running: dict | None, now: datetime) -> list[str]:
@@ -350,6 +385,7 @@ def run(g: Gitea, print_only: bool = False) -> str:
         beat_age = None
     if not print_only:
         answer_commands(g, views, tick_s, running, now)
+        answer_steers(g, views)
         apps = sorted({r for r, _ in issues})
         answer_closed(g, closed_recently(g, apps, now))
         publish_factory_repos(o.WORK)

@@ -22,6 +22,7 @@ from pathlib import Path
 RECENT = 80  # entries kept for the board: the agent's words, its thinking, its actions and what they returned
 RESULT_LINES = 6  # first lines of each tool result shown on the board (the .log file keeps it all)
 WRITE_EVERY_S = 2.0
+LOOP_WINDOW, LOOP_SAME, LOOP_RUN, LOOP_REFUSED = 12, 5, 10, 6
 
 
 def short(text: str, limit: int = 160) -> str:
@@ -65,12 +66,15 @@ def describe_tool(name: str, inp: dict) -> tuple[str, str | None]:
 
 
 class Live:
-    def __init__(self, root: Path, app: str, n: int, step: str, model: str, wt: Path | None = None) -> None:
+    def __init__(self, root: Path, app: str, n: int, step: str, model: str, wt: Path | None = None, url: str = "") -> None:
         self.dir = root / "state" / "board" / "live"
         self.prefix = f"{wt}/" if wt else ""
         self.key = f"{app}-{n}"
         self.state = {"app": app, "n": n, "step": step, "model": model, "started": time.time(), "updated": time.time(),
-                      "turns": 0, "action": "starting", "files": [], "todos": [], "recent": [], "round": 1}
+                      "turns": 0, "action": "starting", "files": [], "todos": [], "recent": [], "round": 1,
+                      "url": url, "warning": "", "warning_id": 0}
+        self._calls: list[str] = []  # the last tool calls, for the loop warning
+        self._refused = 0  # tool calls refused in a row
         self._last_write = 0.0
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +113,7 @@ class Live:
                         inp = {k: (v.removeprefix(self.prefix) if isinstance(v, str) else v) for k, v in inp.items()}
                     what, path = describe_tool(block.get("name", ""), inp)
                     self.state["action"] = what
+                    self.watch_loop(block.get("name", ""), what)
                     full = f"→ runs `{inp.get('command', '')}`" if block.get("name") == "Bash" else f"→ {what}"
                     self.line(full, short(full, 400))
                     if path and path not in self.state["files"]:
@@ -133,10 +138,35 @@ class Live:
                 if not text.strip():
                     continue
                 mark = "✗" if block.get("is_error") else "←"
+                self._refused = self._refused + 1 if block.get("is_error") else 0
+                if self._refused == LOOP_REFUSED:
+                    self.warn(f"{LOOP_REFUSED} of its tool calls in a row failed or were refused")
                 self.line(f"  {mark} {text}", f"  {mark} {clip(text)}")
         elif kind == "result":
             self.state["action"] = "finished" if not ev.get("is_error") else "ended with an error"
         self.write()
+
+    def watch_loop(self, name: str, what: str) -> None:
+        """brevkoll#7 (2026-11-22): 62 `ListAgents` calls in a row, and before that the same denied `cat` again and
+        again. The same call LOOP_SAME times among the last LOOP_WINDOW, or one tool LOOP_RUN times in a row, raises a
+        warning: the board shows it and dispatch.py interrupts the run for an early retrospective."""
+        self._calls = (self._calls + [what])[-max(LOOP_WINDOW, LOOP_RUN):]
+        recent = self._calls[-LOOP_WINDOW:]
+        same = max((recent.count(c) for c in set(recent)), default=0)
+        tools = [c.split(" ", 1)[0] for c in self._calls[-LOOP_RUN:]]
+        if same >= LOOP_SAME:
+            self.warn(f"going in circles: `{what}` {same} times in its last {len(recent)} actions")
+        elif len(tools) >= LOOP_RUN and len(set(tools)) == 1 and name not in ("Read", "Edit", "Write"):
+            self.warn(f"going in circles: `{name}` {LOOP_RUN} times in a row")
+
+    def warn(self, text: str) -> None:
+        if text == self.state.get("warning"):
+            return
+        self.state["warning"] = text
+        self.state["warning_id"] = int(self.state.get("warning_id", 0)) + 1
+        self._calls.clear()
+        self.line(f"[factory] ⚠️ {text}")
+        self.write(force=True)
 
     def write(self, force: bool = False) -> None:
         now = time.time()

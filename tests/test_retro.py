@@ -2,6 +2,7 @@
 worktree (2026-11-22: local runs went in circles for 30-70 minutes per item and nothing noticed)."""
 
 import os
+import time
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 import dispatch  # noqa: E402
+import signals  # noqa: E402
 
 RETRO = "GOAL: limit body size\nDONE: helper written\nSTUCK: pyright error in main.py\nNEXT: fix the call\nFILES: src/app/main.py"
 
@@ -92,7 +94,9 @@ class SessionTests(Repo):
     def fake_runs(self, script: list[dict]) -> mock.Mock:
         calls = []
 
-        def run(cmd: list[str], prompt: str, *a: object) -> dict:
+        def run(
+            cmd: list[str], prompt: str, *a: object, interrupt: object = None
+        ) -> dict:
             calls.append((cmd, prompt))
             res = dict(script.pop(0))
             if "--max-turns" in cmd:  # like Claude Code: never more turns than allowed
@@ -108,9 +112,20 @@ class SessionTests(Repo):
     def session(self, script: list[dict], model: str = "local") -> tuple[dict, list]:
         fake = self.fake_runs(script)
         live = mock.Mock()
+        live.state = {}
         with mock.patch.object(dispatch, "run_agent", new=fake):
             res = dispatch.agent_session(
-                ["claude", "-p"], "do it", self.wt, {}, live, 9e12, model, self.head, 1
+                ["claude", "-p"],
+                "do it",
+                self.wt,
+                {},
+                live,
+                9e12,
+                model,
+                self.head,
+                1,
+                app="app",
+                state=getattr(self, "state", None),
             )
         return res, fake.calls
 
@@ -226,6 +241,134 @@ tests/holdout/test_issue_7.py:129: ImportError</failure></testcase></testsuite><
 PASSING = """<testsuites><testsuite><testcase classname="t" name="test_ac1"/></testsuite></testsuites>"""
 
 
+class OwnerSignalTests(SessionTests):
+    """/stop and /steer from the owner while a step runs (scripts/signals.py)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.state = self.wt / "state"
+
+    def test_a_steer_note_goes_to_the_same_session_which_continues(self) -> None:
+        signals.add_steer(
+            self.state, "app", 1, 77, "the acceptance test is wrong, report it"
+        )
+        res, calls = self.session(
+            [
+                {
+                    "interrupted": "steer",
+                    "session_id": "s",
+                    "num_turns": 3,
+                    "is_error": True,
+                },
+                {"result": "reported", "num_turns": 2, "session_id": "s"},
+            ]
+        )
+        self.assertIn("--resume", calls[1][0])
+        self.assertIn("the acceptance test is wrong", calls[1][1])
+        self.assertEqual([x["comment"] for x in res["steered"]], [77])
+        self.assertFalse(signals.steers_waiting(self.state, "app", 1))  # given once
+        self.assertFalse(res.get("is_error"))
+
+    def test_a_stop_ends_the_run_with_the_comment_id(self) -> None:
+        signals.request_stop(self.state, "app", 1, 88)
+        res, calls = self.session(
+            [
+                {
+                    "interrupted": "stop",
+                    "session_id": "s",
+                    "num_turns": 4,
+                    "is_error": True,
+                }
+            ]
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(res["stopped"], 88)
+        self.assertTrue(res["is_error"])
+
+    def test_the_watch_callback_reports_a_new_loop_warning_then_a_steer(self) -> None:
+        seen = []
+        live = mock.Mock()
+        live.state = {
+            "warning_id": 1
+        }  # a warning from before this session does not count
+
+        def run(
+            cmd: list[str], prompt: str, *a: object, interrupt: object = None
+        ) -> dict:
+            seen.append(interrupt())  # type: ignore[operator]
+            live.state["warning_id"] += 1  # the board sees a loop during this run
+            seen.append(interrupt())  # type: ignore[operator]
+            signals.add_steer(self.state, "app", 1, 5, "x")
+            seen.append(interrupt())  # type: ignore[operator]
+            return {"result": "ok", "num_turns": 1, "session_id": "s"}
+
+        with mock.patch.object(dispatch, "run_agent", side_effect=run):
+            dispatch.agent_session(
+                ["c"],
+                "p",
+                self.wt,
+                {},
+                live,
+                9e12,
+                "local",
+                self.head,
+                1,
+                app="app",
+                state=self.state,
+            )
+        self.assertEqual(seen, [None, "loop", "steer"])
+
+
+class LoopWarningTests(unittest.TestCase):
+    def live(self) -> "dispatch.Live":
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return dispatch.Live(Path(tmp.name), "app", 1, "implement", "local")
+
+    def use(
+        self, live: "dispatch.Live", name: str, inp: dict, error: bool = False
+    ) -> None:
+        live.event(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "tool_use", "name": name, "input": inp}]
+                },
+            }
+        )
+        live.event(
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "content": "x", "is_error": error}
+                    ]
+                },
+            }
+        )
+
+    def test_the_same_call_again_and_again_raises_a_warning_once(self) -> None:
+        live = self.live()
+        for _ in range(5):
+            self.use(live, "ListAgents", {})
+        self.assertIn("going in circles", live.state["warning"])
+        self.assertEqual(live.state["warning_id"], 1)
+
+    def test_refused_calls_in_a_row_raise_a_warning(self) -> None:
+        live = self.live()
+        for i in range(6):
+            self.use(
+                live, "Bash", {"command": f"cat tests/holdout/x{i}.py"}, error=True
+            )
+        self.assertIn("refused", live.state["warning"])
+
+    def test_normal_work_raises_none(self) -> None:
+        live = self.live()
+        for i in range(12):
+            self.use(live, "Edit" if i % 2 else "Read", {"file_path": f"src/a{i}.py"})
+        self.assertEqual(live.state["warning"], "")
+
+
 class BrokenAcceptanceTestTests(unittest.TestCase):
     """brevkoll#7: acceptance tests that fail inside Starlette whatever the app does."""
 
@@ -244,3 +387,31 @@ class BrokenAcceptanceTestTests(unittest.TestCase):
             "already pass", dispatch.junit_problem(PASSING, require_failing=True) or ""
         )
         self.assertIsNone(dispatch.junit_problem(PASSING))
+
+
+class RunAgentInterruptTests(unittest.TestCase):
+    """run_agent with a real child process standing in for Claude Code."""
+
+    def test_an_interrupt_ends_the_process_and_keeps_the_session_id(self) -> None:
+        script = (
+            "import json,sys,time; sys.stdin.read(); "
+            "print(json.dumps({'type':'system','subtype':'init','session_id':'abc'}), flush=True); time.sleep(60)"
+        )
+        live = mock.Mock()
+        asks = iter([None, "stop"])
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(dispatch, "WATCH_EVERY_S", 0.2),
+        ):
+            t0 = time.time()
+            res = dispatch.run_agent(
+                [sys.executable, "-c", script],
+                "prompt",
+                Path(tmp),
+                dict(os.environ),
+                live,
+                time.time() + 120,
+                interrupt=lambda: next(asks, "stop"),
+            )
+        self.assertLess(time.time() - t0, 15)
+        self.assertEqual((res["interrupted"], res["session_id"]), ("stop", "abc"))

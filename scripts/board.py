@@ -184,7 +184,7 @@ CSS = """
 #live>summary::-webkit-details-marker{display:none}#livebody{padding:0 12px 10px}
 #dock{font:inherit;font-size:12px;border:1px solid var(--line);border-radius:4px;background:none;color:inherit;padding:2px 8px}
 .lcard{border-top:1px solid var(--line);padding:8px 0}.lcard .k{font-size:13px}
-.lcard .act{font-weight:600;margin:.3em 0}.lcard ul.todo{margin:.3em 0;padding-left:1.1em;list-style:none}
+.lcard .act{font-weight:600;margin:.3em 0}.lcard .warn{color:#b45309;font-weight:600;margin:.3em 0}.lcard .ctl{font-size:.85em;color:var(--muted,#666);margin:.2em 0}.lcard ul.todo{margin:.3em 0;padding-left:1.1em;list-style:none}
 .lcard ul.todo li{margin:.1em 0}.lcard .files{font-size:.85em;opacity:.85;word-break:break-all}
 .lcard pre{white-space:pre-wrap;font-size:.78em;line-height:1.35;max-height:60vh;overflow:auto}
 @media (min-width:900px){body.docked{padding-right:416px}
@@ -269,7 +269,10 @@ var todos=(it.todos||[]).map(function(t){return '<li>'+(icon[t.status]||'⬜')+'
 var files=(it.files||[]).slice(-10).map(function(f){return '<code>'+e(f)+'</code>'}).join(' ');
 return "<div class='lcard'><div class='k'><b>"+e(it.app)+'#'+e(it.n)+'</b> · '+e(it.step)+' · '+e(it.model)+
 ' · '+mins(it.started)+' · turn '+e(it.turns)+(it.round>1?' · self-fix round '+(it.round-1):'')+'</div>'+
-"<div class='act'>"+e(it.action)+'</div>'+(todos?'<ul class=todo>'+todos+'</ul>':"<div class='files'>no task list yet</div>")+
+(it.warning?"<div class='warn'>⚠️ "+e(it.warning)+' (the agent is interrupted for a retrospective)</div>':'')+
+"<div class='act'>"+e(it.action)+'</div>'+(it.url?"<div class='ctl'>wrong direction? on <a href='"+e(it.url)+
+"#comment-form' target='_blank'>the issue</a> send <code>/steer &lt;what to do instead&gt;</code> (the agent gets it within "+
+"seconds) or <code>/stop</code> (ends this step, the next item gets the model)</div>":'')+(todos?'<ul class=todo>'+todos+'</ul>':"<div class='files'>no task list yet</div>")+
 (files?"<div class='files'>files: "+files+'</div>':'')+
 "<details data-k='live-out-"+k+"'><summary>output (last "+(it.recent||[]).length+" entries)</summary><pre data-k='"+k+"'>"+
 e((it.recent||[]).join('\\n'))+"</pre><a href='live/"+k+".log' target='_blank'>full log</a></details></div>"}).join('')

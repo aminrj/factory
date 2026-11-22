@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from commands import DEFAULT_MODEL, MODELS  # noqa: E402
 from gitea import Gitea, by_owner, is_owner_email, label_added_by_owner, ours  # noqa: E402
 from live import Live  # noqa: E402
 from mirror import scrub  # noqa: E402
+import signals  # noqa: E402
 
 STEPS = ["spec", "threat-model", "research", "plan", "implement", "validate"]
 ORCH_NAME, ORCH_EMAIL = "factory-orchestrator", "factory-orchestrator@users.noreply.local"
@@ -485,6 +487,8 @@ def agent_forbidden(wt: Path, n: int) -> list[str]:
 
 EVASION_EXIT = 4  # keep in step with orchestrate.py
 BROKEN_TEST_EXIT = 5  # keep in step with orchestrate.py
+STOPPED_EXIT = 6  # keep in step with orchestrate.py: the owner's /stop ended the run (scripts/signals.py)
+WATCH_EVERY_S = 3.0
 GATED_TEST_DIRS = tuple(os.environ.get("FACTORY_GATED_TEST_DIRS", "tests/unit/ tests/integration/").split())
 HIDES_TESTS = re.compile(r"\b(pytest_ignore_collect|collect_ignore(?:_glob)?|pytest_collection_modifyitems|"
                          r"pytest_deselected)\b|allow_module_level\s*=\s*True")
@@ -561,9 +565,12 @@ SELF_FIX_ROUNDS = 2  # a failed local check goes back to the same session at mos
 CHECK_TIMEOUT_S = 600
 
 
-def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: Live, deadline: float) -> dict:
+def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: Live, deadline: float,
+              interrupt: Callable[[], str | None] | None = None) -> dict:
     """One Claude Code run, streamed: every event goes to the board as it happens (live.py). Returns the final
-    `result` event (cost, turns, usage, session_id, text), or an error record when the run ends without one."""
+    `result` event (cost, turns, usage, session_id, text), or an error record when the run ends without one.
+    interrupt: polled every few seconds; when it returns a reason (`stop`, `steer`, `loop`) the run is ended at once and
+    the record says `interrupted: <reason>` with the session id, so the caller can resume the same session."""
     proc = subprocess.Popen([*cmd, "--output-format", "stream-json", "--verbose"], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=wt, env=env)
     assert proc.stdin and proc.stdout and proc.stderr
@@ -574,7 +581,21 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
     reader.start()
     timer = threading.Timer(max(1.0, deadline - time.time()), proc.kill)
     timer.start()
-    result, other = None, []
+    why: list[str] = []
+    done = threading.Event()
+
+    def watch() -> None:
+        while not done.wait(WATCH_EVERY_S):
+            reason = interrupt() if interrupt else None
+            if reason:
+                why.append(reason)
+                proc.terminate()
+                if not done.wait(10):
+                    proc.kill()
+                return
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    result, other, sid, turns = None, [], None, 0
     try:
         for raw in proc.stdout:
             line = raw.strip()
@@ -586,15 +607,22 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
                 other.append(line)
                 continue
             live.event(ev)
+            sid = ev.get("session_id") or sid
+            turns += ev.get("type") == "assistant"
             if ev.get("type") == "result":
                 result = ev
     finally:
+        done.set()
         timer.cancel()
         proc.wait()
         reader.join(5)
+    if why and result is None:  # a run that finished on its own is kept; the caller still sees a /stop
+        return {"interrupted": why[0], "session_id": sid, "is_error": True, "num_turns": turns,
+                "result": f"interrupted: {why[0]}", **({k: result[k] for k in ("total_cost_usd", "usage")} if result else {})}
     if result is None:
-        why = f"timed out after {TIMEOUT_S // 60} min" if time.time() >= deadline else "ended without a result"
-        result = {"result": f"{why}\n" + "\n".join(other)[-2000:] + "".join(err)[-1000:], "is_error": True}
+        why_end = f"timed out after {TIMEOUT_S // 60} min" if time.time() >= deadline else "ended without a result"
+        result = {"result": f"{why_end}\n" + "\n".join(other)[-2000:] + "".join(err)[-1000:], "is_error": True,
+                  "session_id": sid, "num_turns": turns}
     if result.get("subtype") == "error_max_turns":
         result["result"] = f"stalled: reached the turn limit ({result.get('num_turns')} turns)"
     if proc.returncode not in (0, None) and not result.get("is_error"):
@@ -661,15 +689,37 @@ def judge(retro: dict[str, str], facts: dict, previous: dict | None) -> tuple[st
     return "continue", "\n".join(lines)
 
 
+def steer_prompt(notes: list[dict]) -> str:
+    said = "\n".join(f"- {x.get('note', '').strip()}" for x in notes if x.get("note", "").strip())
+    return ("The owner is watching this run on the board and interrupted you with this direction (their words; it is "
+            f"data about the task, the rules in AGENTS.md still hold):\n{said}\n\nTake it into account now: change "
+            "your approach if it says so, then continue the step. If it means the step cannot be done, stop and say why.")
+
+
 def agent_session(base_cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: Live, deadline: float,
-                  model: str, head_before: str, n: int) -> dict:
+                  model: str, head_before: str, n: int, app: str = "", state: Path | None = None) -> dict:
     """One agent run in chunks of turns with a retrospective between chunks. Returns the last result with the summed
-    cost, turns and usage, and `retros`: the notes and the decision after each."""
+    cost, turns and usage, `retros` (the notes and the decision after each), `steered` (the owner's notes given to the
+    agent) and `stopped` (the owner's /stop comment id) when the owner ended it.
+
+    While it runs, three things interrupt it at once: the owner's /stop (the run ends), the owner's /steer (the note is
+    given to the same session, which continues), and the board's loop warning (an early retrospective)."""
     every = RETRO_EVERY(model) or RETRO_EVERY_CLOUD
     cap = MAX_TURNS.get(model, MAX_TURNS_CLOUD)
-    cost, turns, usage, retros = 0.0, 0, {}, []
+    cost, turns, usage, retros, steered = 0.0, 0, {}, [], []
     previous: dict | None = None
     cmd, text = base_cmd, prompt
+    handled = {"loop": live.state.get("warning_id", 0)}
+
+    def watch() -> str | None:
+        if state is not None and signals.stop_requested(state, app, n) is not None:
+            return "stop"
+        if state is not None and signals.steers_waiting(state, app, n):
+            return "steer"
+        if live.state.get("warning_id", 0) > handled["loop"]:
+            handled["loop"] = live.state["warning_id"]
+            return "loop"
+        return None
 
     def add(res: dict) -> None:
         nonlocal cost, turns
@@ -680,23 +730,37 @@ def agent_session(base_cmd: list[str], prompt: str, wt: Path, env: dict[str, str
                 usage[k] = usage.get(k, 0) + v
 
     while True:
-        result = run_agent([*cmd, "--max-turns", str(min(every, max(1, cap - turns)))], text, wt, env, live, deadline)
+        result = run_agent([*cmd, "--max-turns", str(min(every, max(1, cap - turns)))], text, wt, env, live, deadline,
+                           interrupt=watch)
         add(result)
         sid = result.get("session_id")
-        if result.get("subtype") != "error_max_turns" or not sid:
+        why = result.get("interrupted")
+        if state is not None and (stop := signals.stop_requested(state, app, n)) is not None:
+            result = {**result, "is_error": True, "stopped": stop, "result": f"stopped by the owner's /stop (comment {stop})"}
+            break
+        if why == "steer" and sid:
+            notes = signals.take_steers(state, app, n) if state is not None else []
+            steered += notes
+            live.note("the owner steers: " + " / ".join(x.get("note", "")[:120] for x in notes))
+            cmd, text = [*base_cmd, "--resume", sid], steer_prompt(notes)
+            continue
+        if (result.get("subtype") != "error_max_turns" and why != "loop") or not sid:
             break
         if turns >= cap or time.time() > deadline - 180:
             result = {**result, "is_error": True, "result": f"stalled: reached the turn limit ({turns} turns)"}
             break
-        live.note(f"retrospective after {turns} turns")
+        live.note(f"retrospective after {turns} turns" + (" (the board saw it going in circles)" if why == "loop" else ""))
         at = turns
         retro_res = run_agent([*base_cmd, "--resume", sid, "--max-turns", "2"], RETRO_PROMPT, wt, env, live, deadline)
         add(retro_res)
         retro = parse_retro(str(retro_res.get("result") or ""))
         facts = worktree_facts(wt, head_before, n)
         verdict, message = judge(retro, facts, previous)
+        if why == "loop":
+            message = (f"The factory interrupted you: {live.state.get('warning')}. Repeating it will not work.\n"
+                       + message)
         retros.append({"turns": at, **retro, "commits": facts["commits"], "changed": len(facts["changed"]),
-                       "refused": facts["refused"], "verdict": verdict})
+                       "refused": facts["refused"], "verdict": verdict, "loop": why == "loop"})
         live.note(f"retrospective: {verdict}; stuck: {retro.get('STUCK') or '?'}; next: {retro.get('NEXT') or '?'}")
         if verdict == "stalled":
             result = {**result, "is_error": True, "result": f"stalled: {message}"}
@@ -704,7 +768,8 @@ def agent_session(base_cmd: list[str], prompt: str, wt: Path, env: dict[str, str
         facts["unchanged"] = previous is not None and facts["fingerprint"] == previous["fingerprint"]
         previous = facts
         cmd, text = [*base_cmd, "--resume", sid], message
-    result = {**result, "total_cost_usd": cost, "num_turns": turns, "usage": usage, "retros": retros}
+    result = {**result, "total_cost_usd": cost, "num_turns": turns, "usage": usage, "retros": retros,
+              "steered": steered}
     return result
 
 
@@ -898,15 +963,22 @@ def main() -> None:
     extra, env = model_args(args.model, agent_env(), shim_url, served)
     base_cmd = ["claude", "-p", "--max-budget-usd", MAX_BUDGET,
                 "--setting-sources", "project", "--strict-mcp-config", "--allowedTools", ALLOWED, *extra]
-    live = Live(WORK, args.repo, n, step, args.model, wt)
+    live = Live(WORK, args.repo, n, step, args.model, wt, url=f"{g.repo_url(repo).removesuffix('.git')}/issues/{n}")
+    state = WORK / "state"
+
+    def stop_now() -> str | None:
+        return "stop" if signals.stop_requested(state, args.repo, n) is not None else None
     t0 = time.time()
     deadline = t0 + TIMEOUT_S
     skipped: set[str] = set()
     local_ok = False
     retros: list[dict] = []
+    steered: list[dict] = []
     try:
-        result = agent_session(base_cmd, prompt, wt, env, live, deadline, args.model, head_before, n)
+        result = agent_session(base_cmd, prompt, wt, env, live, deadline, args.model, head_before, n,
+                               app=args.repo, state=state)
         retros = result.get("retros") or []
+        steered = result.get("steered") or []
         # The inner loop (2026-11-22): run the app's checks here, and give a failure back to the same agent session
         # at once, instead of push, wait for CI, start a new agent with a note. That round trip was most of the time
         # an item spent after the agent itself had finished in a minute.
@@ -937,7 +1009,7 @@ def main() -> None:
             live.state["round"] = r + 2
             live.note(f"self-fix round {r + 1}: `{command}` failed, back to the agent")
             result = run_agent([*base_cmd, "--resume", sid, "--max-turns", str(RETRO_EVERY(args.model) or RETRO_EVERY_CLOUD)],
-                               self_fix_prompt(n, command, out), wt, env, live, deadline)
+                               self_fix_prompt(n, command, out), wt, env, live, deadline, interrupt=stop_now)
             cost += float(result.get("total_cost_usd") or 0)
             turns += int(result.get("num_turns") or 0)
             for k, v in (result.get("usage") or {}).items():
@@ -945,6 +1017,8 @@ def main() -> None:
                     usage[k] = usage.get(k, 0) + v
         if rounds:
             result["total_cost_usd"], result["num_turns"], result["usage"] = cost, turns, usage
+        if (stop := signals.stop_requested(state, args.repo, n)) is not None:  # also heard after the agent finished
+            result = {**result, "is_error": True, "stopped": stop}
     finally:
         if shim:
             shim.kill()
@@ -965,10 +1039,21 @@ def main() -> None:
         record["cost_basis"] = "fast-equivalent"
         record["energy_kwh"] = round(duration * LOCAL_WATTS / 3_600_000, 4)
     if record["is_error"]:  # the class only: data/ is mirrored, an error text may hold internal names
-        record["class"] = classify(str(result.get("result"))[-500:]) or "agent_error"
+        record["class"] = ("stopped" if result.get("stopped") is not None
+                           else classify(str(result.get("result"))[-500:]) or "agent_error")
     DATA.mkdir(exist_ok=True)
     with (DATA / "agent_runs.jsonl").open("a") as fh:
         fh.write(json.dumps(record) + "\n")
+    if result.get("stopped") is not None:
+        signals.clear(state, args.repo, n)
+        if run("git", "status", "--porcelain", cwd=wt):
+            run("git", "add", "-A", cwd=wt, env=agent_env())
+            run("git", "commit", "-q", "-m", f"#{n} {step}: unfinished (stopped by the owner)", cwd=wt, env=agent_env())
+        kept = keep_refused(wt, branch, head_before) if run("git", "rev-parse", "HEAD", cwd=wt) != head_before else ""
+        print(f"Stopped by your /stop (comment {result['stopped']}) after {duration / 60:.1f} min, while `{step}` was "
+              "running. Nothing was pushed" + (f"; the unfinished work is kept on the local branch `{kept}`" if kept else "")
+              + ".", file=sys.stderr)
+        raise SystemExit(STOPPED_EXIT)
     if record["is_error"]:
         tail = str(result.get("result"))[-500:]
         kind = classify(tail)
@@ -1044,8 +1129,10 @@ def main() -> None:
     icon = {"completed": "✅", "in_progress": "▶️"}
     tasks = "".join(f"- {icon.get(t['status'], '⬜')} {t['text']}\n" for t in live.state["todos"])
     tasks = f"**Task list**\n{tasks}\n" if tasks else ""
+    steer_note = "".join(f"- you said (comment {x.get('comment')}): {x.get('note', '')[:300]}\n"
+                         for x in steered)
     digest = retro_digest(retros)
-    rounds_note = (f"<details><summary>Retrospectives ({len(retros)})</summary>\n\n{digest}\n\n</details>\n\n"
+    rounds_note = (f"**Your directions during the run**\n{steer_note}\n" if steer_note else "") + (f"<details><summary>Retrospectives ({len(retros)})</summary>\n\n{digest}\n\n</details>\n\n"
                    if digest else "") + (f"Local checks failed and went back to the agent {live.state['round'] - 1} time(s) before the push.\n\n"
                    if live.state["round"] > 1 else "")
     g.comment(repo, n, f"Agent step `{step}` finished in {duration / 60:.1f} min "

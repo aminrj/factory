@@ -31,7 +31,9 @@ nothing can happen, the factory says why.
 | `/go model=smart\|fast\|cheap` | any checkpoint | the same step on Claude (Opus, Sonnet, Haiku): spends cloud tokens |
 | `/go minutes=N` | any checkpoint | record your real time on the gate instead of the default |
 | `/rework <what is wrong>` | CP3 plan, CP4 review, CP5 release | send it back with a note |
-| `/stop` | anywhere | stop the item; one sent while a step runs is carried out at the next checkpoint |
+| `/stop` | while a step runs | **ends the step within seconds** (its unfinished work kept on a local `refused/` branch, nothing pushed); the item waits at a `-stopped` checkpoint (`/go` again, `/go model=fast`, or `/stop`), and the lane is free for the next item |
+| `/stop` | at a checkpoint | stop the item |
+| `/steer <note>` | while a step runs | the running agent is interrupted within seconds, gets your note and **continues the same session** with it; the note is listed in the step's comment |
 | label `night/ok` | the issue | the night shift may pass CP1 to CP3 for you (22:00 to 07:00) and stops at CP4 |
 
 On the pinned **Factory status** issue:
@@ -105,6 +107,10 @@ on another item runs in parallel with a local step.
 
 ## Where to look
 
+- **Working now** (top of the board) also says when a run goes in circles (the same call 5 times in 12, one tool 10
+  times in a row, 6 refused calls in a row): the agent is then interrupted for an early retrospective. Each card links
+  to its issue for `/steer` and `/stop`. The board itself stays read-only: commands go through Gitea, where your login
+  counts and every action is recorded.
 - **Working now** (top of the board): each running agent's step, model, minutes, turns, what it is doing this second,
   its task list, the files it touched, the last 80 entries of its output (what it thinks, every command with the first lines of what it returned, its messages) and a link to the full log. Refreshed every 4 seconds; panels
   you open or close stay that way. **dock ⇥** keeps it beside the board on a wide screen and as a bottom sheet on a

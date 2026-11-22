@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commands  # noqa: E402
 import mirror  # noqa: E402
+import signals  # noqa: E402
 import lanes  # noqa: E402
 import lease  # noqa: E402
 import night  # noqa: E402
@@ -330,6 +331,7 @@ def checkpoint(ctx: Ctx, label: str, title: str, body: str, resume: str, stop: s
     text = (f"{CP_PREFIX} {label}: {title}\n\n{body}\n\n{files + chr(10) * 2 if files else ''}{ctx.status_line()}\n\n"
             f"{reply}\n{marker}")
     c = ctx.comment(text)
+    signals.clear(STATE, ctx.app, ctx.n)  # a /stop or /steer meant for the step that just ended must not reach the next
     log(f"{ctx.app}#{ctx.n}: CHECKPOINT {label} posted (comment {c['id']}), resume={resume}")
     commit_ops(f"Checkpoint {label}: {ctx.app}#{ctx.n}")
     notify(f"{ctx.app}: checkpoint {label}", f"{title}. Reply /go on {ctx.app}#{ctx.n}.",
@@ -397,6 +399,10 @@ def dispatch_once(ctx: Ctx, step: str, note: str | None = None, note_kind: str =
         raise AgentDeclined(step, out)
     if res.returncode == EVASION_EXIT:
         raise GateEvasion(out[-3000:])
+    if res.returncode == STOPPED_EXIT:  # the owner's /stop ended the step at once (scripts/signals.py)
+        m = re.search(r"/stop \(comment (\d+)\)", out)
+        log(f"{ctx.app}#{ctx.n}: {step} ended by the owner's /stop")
+        raise StepStopped(int(m.group(1)) if m else 0, out.strip().splitlines()[-1][:600] if out.strip() else "")
     if res.returncode == BROKEN_TEST_EXIT:
         raise NeedsHuman(out[-3000:])  # not a retry and not a reason to switch models: the test is wrong
     if res.returncode != 0:
@@ -408,6 +414,8 @@ def dispatch_once(ctx: Ctx, step: str, note: str | None = None, note_kind: str =
 DECLINED_EXIT = 3  # keep in step with dispatch.py
 EVASION_EXIT = 4  # keep in step with dispatch.py
 BROKEN_TEST_EXIT = 5  # keep in step with dispatch.py
+STOPPED_EXIT = 6  # keep in step with dispatch.py
+STEER = re.compile(r"^\s*/steer\b[ \t]*(.*)$", re.IGNORECASE | re.DOTALL)
 FAILURE_CLASS = re.compile(r"\[class: (\w+)\]")  # written by dispatch.py
 CONTEXTS = ("checks", "gates", "security", "holdout")
 
@@ -1146,7 +1154,17 @@ class StopRequested(Exception):
         self.comment_id = comment_id
 
 
+class StepStopped(StopRequested):
+    """The owner's /stop ended a running step at once (dispatch.py exit 6). Only the step ends: the item waits at a
+    checkpoint, so the lane is free for the next item and the owner chooses what happens to this one."""
+
+    def __init__(self, comment_id: int, detail: str = ""):
+        super().__init__(comment_id)
+        self.detail = detail
+
+
 def stop_item(ctx: Ctx, marker: dict[str, str], comment_id: int, where: str = "", also: str = "") -> None:
+    signals.clear(STATE, ctx.app, ctx.n)
     ctx.comment(f"{CLAIM_PREFIX} Stopped by /stop (comment {comment_id}){also}{where}. Nothing more will run for this issue.")
     if marker.get("stop") == "kill":
         ctx.g.set_stage(ctx.repo, ctx.n, "killed")
@@ -1356,6 +1374,13 @@ def run_handler(g: Gitea, repo: str, n: int, ctx: Ctx, marker: dict[str, str], h
     try:
         HANDLERS[handler](ctx)
         return f"ran {handler}"
+    except StepStopped as e:
+        checkpoint(ctx, f"{handler}-stopped", "you stopped the running step",
+                   f"Your `/stop` (comment {e.comment_id}) ended the step at once. {e.detail}\n\n"
+                   f"- `/go` runs `{handler}` again (`/go model=fast` on Claude)\n"
+                   "- `/rework <what to do differently>` at the plan or review checkpoint, or comment your direction and `/go`\n"
+                   "- `/stop` ends the item", handler)
+        return "step stopped"
     except StopRequested as e:
         stop_item(ctx, marker, e.comment_id, where=" between two steps")
         return "stopped"
@@ -1553,7 +1578,8 @@ def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
         return
     for c in owner_comments(g, repo, n):
         key = f"{repo}#{c['id']}"
-        if c["id"] <= pivot["id"] or key in seen or not c["body"].lstrip().startswith("/") or is_command(c["body"]):
+        if (c["id"] <= pivot["id"] or key in seen or not c["body"].lstrip().startswith("/") or is_command(c["body"])
+                or STEER.match(c["body"])):  # /steer: status.py hands it to the running step or says why not
             continue
         word = c["body"].lstrip().split()[0][:30]
         if word.lower() == "/llm":  # brevkoll#26, 2026-11-22: sent on a work issue; it only works on the status issue

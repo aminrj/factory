@@ -82,10 +82,24 @@ class AnswerTests(StateDir):
         self.assertIn("will not run", text)
         self.assertIn("`implement`", text)
 
-    def test_stop_during_a_run_is_heard_between_phases(self) -> None:
+    def test_stop_during_a_run_ends_the_step_now(self) -> None:
         g = FakeGitea({19: [c(11, "/go"), CLAIM, c(13, "/stop")]})
         status.answer_commands(g, [status.issue_view(g, "owner/app", 19)], 300, {"app": "app", "n": 19, "step": "x"}, NOW)
-        self.assertIn("between two phases", g.posted[0][1])
+        self.assertIn("being ended now", g.posted[0][1])
+        self.assertEqual(status.signals.stop_requested(o.STATE, "app", 19), 13)  # the running step sees this file
+
+    def test_steer_reaches_the_running_step_once_and_is_refused_when_nothing_runs(self) -> None:
+        g = FakeGitea({19: [c(11, "/go"), CLAIM, c(14, "/steer the acceptance test is wrong, report it")]})
+        view = status.issue_view(g, "owner/app", 19)
+        status.answer_steers(g, [view])
+        status.answer_steers(g, [view])
+        self.assertEqual(len(g.posted), 1)
+        self.assertIn("Passed to the running agent", g.posted[0][1])
+        notes = status.signals.take_steers(o.STATE, "app", 19)
+        self.assertEqual([(x["comment"], x["note"]) for x in notes], [(14, "the acceptance test is wrong, report it")])
+        g2 = FakeGitea({20: [CHECKPOINT, c(15, "/steer do X")]})
+        status.answer_steers(g2, [status.issue_view(g2, "owner/app", 20) | {"running": False}])
+        self.assertIn("Nothing of this issue is running", g2.posted[0][1])
 
     def test_a_command_on_another_issue_is_told_it_runs_after(self) -> None:
         g = FakeGitea({19: [c(11, "/go"), CLAIM], 15: [CHECKPOINT, c(20, "/rework the label")]})

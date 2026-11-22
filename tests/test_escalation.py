@@ -136,3 +136,45 @@ class BrokenTestExitTests(unittest.TestCase):
         self.assertEqual(
             ctx.comments, []
         )  # no switch to fast: the test is wrong, not the model
+
+
+class StopNowTests(unittest.TestCase):
+    def test_a_stopped_step_raises_step_stopped_with_the_comment_and_is_not_escalated(
+        self,
+    ) -> None:
+        ctx = Ctx()
+        done = mock.Mock(
+            returncode=orchestrate.STOPPED_EXIT,
+            stdout="",
+            stderr="Stopped by your /stop (comment 1262) after 3.0 min, while `implement` was running.",
+        )
+        with (
+            mock.patch.object(orchestrate.subprocess, "run", return_value=done),
+            mock.patch.object(orchestrate, "log"),
+        ):
+            with self.assertRaises(orchestrate.StepStopped) as e:
+                orchestrate.dispatch(ctx, "implement")  # type: ignore[arg-type]
+        self.assertEqual(e.exception.comment_id, 1262)
+        self.assertEqual(ctx.comments, [])
+
+    def test_the_item_waits_at_a_stopped_checkpoint_instead_of_ending(self) -> None:
+        posted = []
+
+        def boom(ctx: object) -> None:
+            raise orchestrate.StepStopped(1262, "Nothing was pushed.")
+
+        with (
+            mock.patch.dict(orchestrate.HANDLERS, {"after_gate3": boom}),
+            mock.patch.object(
+                orchestrate, "checkpoint", side_effect=lambda *a, **k: posted.append(a)
+            ),
+            mock.patch.object(orchestrate, "stop_item") as stop_item,
+        ):
+            out = orchestrate.run_handler(
+                None, "owner/app", 1, Ctx(), {}, "after_gate3"
+            )  # type: ignore[arg-type]
+        self.assertEqual(out, "step stopped")
+        stop_item.assert_not_called()
+        self.assertEqual(posted[0][1], "after_gate3-stopped")
+        self.assertIn("comment 1262", posted[0][3])
+        self.assertEqual(posted[0][4], "after_gate3")  # `/go` runs the step again
