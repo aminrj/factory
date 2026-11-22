@@ -1,6 +1,6 @@
 # Board
 
-_Generated 2026-11-22 07:07 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 07:37 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
@@ -12,7 +12,7 @@ _Generated 2026-11-22 07:07 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| Chunked uploads without Content-Length are only rejected after parsing | brevkoll#7 |
 
 ## spec-ready
 
