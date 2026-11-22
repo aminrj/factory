@@ -284,11 +284,12 @@ def spec_prompt(n: int, repo: str, branch: str) -> str:
         "examples. Keep it small: one change, a Size, a Timebox, numbered acceptance criteria (AC1, AC2, ...), a Contract "
         "section and an Out of scope section. The line `Status: draft` must be near the top; never write `Status: approved`. "
         "Write no `<` placeholders: if something is unknown, decide the smallest reasonable thing and say so under "
-        f"'Assumptions'. Then write the holdout tests in exactly one file, tests/holdout/test_issue_{n}.py (that path, "
-        "inside the tests/holdout/ folder): one test per acceptance "
-        "criterion, named after it, that fails on the current code and passes once the change is built, using only the "
-        "Contract. Run `uv run ruff format tests/holdout` and `uv run pytest tests/holdout/test_issue_"
-        f"{n}.py` (they should fail for the right reason). Do not change src/ or any other test. Do not run git push. "
+        f"'Assumptions'. Then write the holdout tests in exactly one file, thoughts/{n}/test_issue_{n}.py (agents may not "
+        f"write inside tests/holdout/; the factory moves the file to tests/holdout/test_issue_{n}.py after your run): "
+        "one test per acceptance criterion, named after it, that fails on the current code and passes once the change "
+        f"is built, using only the Contract. Run `uv run ruff format thoughts/{n}` and `uv run pytest "
+        f"thoughts/{n}/test_issue_{n}.py` (they should fail for the right reason: the change is missing, not a mistake "
+        "in the test). Do not change src/ or any other test. Do not run git push. "
         "Commit with git add and git commit. Finish with a short review guide: the assumptions you made and what the "
         "owner should check first."
     )
@@ -299,8 +300,10 @@ def place_holdout_tests(wt: Path, n: int, head_before: str) -> list[str]:
     empty ones are dropped. brevkoll#7: the local model wrote tests/holdout_issue_7.py (158 lines) and an empty
     tests/holdout_test_issue_7.py, and the guard refused the whole draft. Returns what was moved, for the review guide."""
     target = wt / "tests" / "holdout" / f"test_issue_{n}.py"
-    out = run("git", "diff", "--name-only", "--diff-filter=A", f"{head_before}", "--", "tests", cwd=wt).splitlines()
-    out += run("git", "ls-files", "--others", "--exclude-standard", "--", "tests", cwd=wt).splitlines()
+    where = ("tests", f"thoughts/{n}")  # the spec prompt asks for thoughts/N/test_issue_N.py (agents may not write
+    # inside tests/holdout/: brevkoll's deny rule made every spec run fight it, 2026-11-22, #7 #14 #32)
+    out = run("git", "diff", "--name-only", "--diff-filter=A", f"{head_before}", "--", *where, cwd=wt).splitlines()
+    out += run("git", "ls-files", "--others", "--exclude-standard", "--", *where, cwd=wt).splitlines()
     stray = sorted({f for f in out if f.endswith(".py") and not f.startswith("tests/holdout/")
                     and re.search(rf"(holdout|issue)[_-]?{n}(?!\d)", f)})
     moved = []
@@ -316,7 +319,8 @@ def place_holdout_tests(wt: Path, n: int, head_before: str) -> list[str]:
         path.rename(target)
         moved.append(f"{f} -> {target.relative_to(wt)}")
     if moved:
-        run("git", "add", "-A", "tests", cwd=wt)
+        run("git", "add", "-A", *[w for w in where if (wt / w).exists() or run(
+            "git", "ls-files", "--", w, cwd=wt, check=False)], cwd=wt)
         run("git", "commit", "-q", "-m", f"#{n} spec: holdout tests moved to tests/holdout/", cwd=wt, env=agent_env())
     return moved
 
@@ -595,7 +599,7 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
                 return
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
-    result, other, sid, turns = None, [], None, 0
+    result, other, sid, msgs = None, [], None, set()
     try:
         for raw in proc.stdout:
             line = raw.strip()
@@ -608,7 +612,8 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
                 continue
             live.event(ev)
             sid = ev.get("session_id") or sid
-            turns += ev.get("type") == "assistant"
+            if ev.get("type") == "assistant":  # one model turn may come as several events (one per content block)
+                msgs.add((ev.get("message") or {}).get("id") or len(msgs))
             if ev.get("type") == "result":
                 result = ev
     finally:
@@ -617,12 +622,12 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
         proc.wait()
         reader.join(5)
     if why and result is None:  # a run that finished on its own is kept; the caller still sees a /stop
-        return {"interrupted": why[0], "session_id": sid, "is_error": True, "num_turns": turns,
+        return {"interrupted": why[0], "session_id": sid, "is_error": True, "num_turns": len(msgs),
                 "result": f"interrupted: {why[0]}", **({k: result[k] for k in ("total_cost_usd", "usage")} if result else {})}
     if result is None:
         why_end = f"timed out after {TIMEOUT_S // 60} min" if time.time() >= deadline else "ended without a result"
         result = {"result": f"{why_end}\n" + "\n".join(other)[-2000:] + "".join(err)[-1000:], "is_error": True,
-                  "session_id": sid, "num_turns": turns}
+                  "session_id": sid, "num_turns": len(msgs)}
     if result.get("subtype") == "error_max_turns":
         result["result"] = f"stalled: reached the turn limit ({result.get('num_turns')} turns)"
     if proc.returncode not in (0, None) and not result.get("is_error"):

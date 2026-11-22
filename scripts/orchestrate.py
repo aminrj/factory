@@ -1147,7 +1147,7 @@ def night_command(g: Gitea, repo: str, n: int, pivot: dict, mine: list[dict]) ->
 
 
 class StopRequested(Exception):
-    """The owner said /stop while a handler was running (heard between phases)."""
+    """The owner said /stop while a handler was running: heard between phases, or at once as StepStopped."""
 
     def __init__(self, comment_id: int):
         super().__init__(f"/stop (comment {comment_id})")
@@ -1570,7 +1570,7 @@ def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
                 continue
             word = c["body"].lstrip().split()[0][:30]
             g.comment(repo, n, f"{NOTICE_PREFIX} `{word}` (comment {c['id']}) did nothing: this issue has not started "
-                               "yet. Reply `/go` to start it (an agent drafts the spec, then Checkpoint 1 waits for you); "
+                               "yet. Reply `/go` to start it (the autopilot runs to a staged build you can try; `/go stop=spec` pauses after the spec); "
                                "add `model=fast` to use the cloud.")
             seen.add(key)
         STATE.mkdir(exist_ok=True)
@@ -1841,8 +1841,8 @@ def night_tick(g: Gitea) -> None:
 
 
 def adopt(g: Gitea, repo: str, n: int, title: str, go: dict | None = None) -> None:
-    """Start an issue: an agent drafts the spec and the holdout tests, then Checkpoint 1. Started by the owner's `/go`
-    (go: that comment; the model it names, Checkpoint 1 waits for the owner) or by the night shift (label, local model,
+    """Start an issue: an agent drafts the spec and the holdout tests; then the autopilot runs on to Checkpoint 4 (or
+    Checkpoint 1 with `stop=spec`). Started by the owner's `/go` (go: that comment and the model it names) or by the night shift (label, local model,
     Checkpoint 1 passed on the next tick)."""
     if go is not None:
         opts = command_options(go["body"])
@@ -1882,7 +1882,7 @@ def adopt(g: Gitea, repo: str, n: int, title: str, go: dict | None = None) -> No
 
 
 def pick_up(ctx: Ctx) -> None:
-    """The spec step for an issue that has no spec yet, then Checkpoint 1."""
+    """The spec step for an issue that has no spec yet; then the autopilot goes on, or Checkpoint 1 (stop=spec, night)."""
     issue = ctx.g.get(f"/repos/{ctx.repo}/issues/{ctx.n}")
     title = issue.get("title", "") if isinstance(issue, dict) else ""
     dispatch(ctx, "spec")

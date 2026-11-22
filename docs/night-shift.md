@@ -2,9 +2,11 @@
 
 ## The checkpoints (CP1 to CP4)
 
-A work item is one Gitea issue. Comment `/go` on a new issue to start it. The foreman then moves it through four
-checkpoints. At each one it posts a `🛑 CHECKPOINT` comment and waits for your answer: `/go`, `/rework <what is
-wrong>` (CP3 and CP4) or `/stop`. At CP1 to CP3 your `/go` **is** the approval: the factory writes it into the file for
+A work item is one Gitea issue. Comment `/go` on a new issue to start it. The **autopilot** then runs it straight to
+CP4 (a staged build): your starting `/go` approves the spec, the threat model and the plan as they come, each approval
+still a commit naming that comment. It stops at CP1 or CP3 only when you ask (`/go stop=spec`, `/go stop=plan`), when the
+plan touches risky files, or when a step fails. Where it stops it posts a `🛑 CHECKPOINT` comment and waits for your
+answer: `/go`, `/rework <what is wrong>` (CP3 and CP4) or `/stop`. At CP1 to CP3 your `/go` **is** the approval: the factory writes it into the file for
 you (a commit by factory-orchestrator with `Approved-by-owner: comment N`), and the guards accept it only when comment N
 is your `/go` on that issue. Edit a file first only when you want something different.
 

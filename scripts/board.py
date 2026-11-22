@@ -232,15 +232,17 @@ border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:p
 """
 
 GATES = """<table><tr><th>CP</th><th>What waits for you</th><th>What you decide</th><th>After your /go</th></tr>
-<tr><td>start</td><td>a new issue</td><td>/go starts it</td><td>spec and acceptance tests drafted</td></tr>
-<tr><td>1 spec</td><td>spec.md + holdout tests</td><td>Right change, right tests? /go approves</td><td>threat model, research and plan, back to back</td></tr>
-<tr><td>3 plan</td><td>plan.md + threat model + open questions</td><td>/go builds it, or /rework &lt;what to change&gt;</td><td>build: phases with local checks and self-fix, CI, validation, staging</td></tr>
+<tr><td>start</td><td>a new issue</td><td>/go starts it</td><td>the autopilot: spec, threat model, research, plan, build, checks, staging, straight to CP4</td></tr>
+<tr><td>1 spec</td><td>only with <code>/go stop=spec</code></td><td>Right change, right tests? /go approves</td><td>the autopilot goes on to CP4</td></tr>
+<tr><td>3 plan</td><td>with <code>/go stop=plan</code>, or a plan that touches risky files</td><td>/go builds it, or /rework &lt;what to change&gt;</td><td>build: phases with local checks and self-fix, CI, validation, staging</td></tr>
 <tr><td>4 review</td><td>PR (checks green) + staged build</td><td>Try it, read the diff, merge; or /rework</td><td>/go after the merge: mirror, staging removed</td></tr>
 <tr><td>4b</td><td>merged and mirrored</td><td>/go closes the item (release is manual for now)</td><td>closed</td></tr></table>
 <p class="muted">Suffixes: <b>-retry</b> a step failed (budget 2) · <b>-blocked</b> model, credit or login (no retry spent) ·
-<b>-fix</b> something only you can fix · <b>-failed</b> retries used up. Commands: <code>/go</code> (local model;
-<code>model=smart|fast|cheap</code> for Claude; <code>minutes=N</code> optional), <code>/rework &lt;note&gt;</code> (CP3, CP4),
-<code>/stop</code>. Label <code>night/ok</code>: the night shift passes CP1 to CP3 on the local model and stops at CP4.</p>"""
+<b>-fix</b> something only you can fix · <b>-failed</b> retries used up · <b>-stopped</b> you ended the step. Commands:
+<code>/go</code> (local model; <code>model=smart|fast|cheap</code> for Claude; <code>stop=spec|plan</code> to pause there),
+<code>/rework &lt;note&gt;</code> (CP3, CP4), <code>/stop</code> (while a step runs: ends that step now), <code>/steer
+&lt;note&gt;</code> (while a step runs: the agent gets it within seconds). A failed local step is tried once on Claude by
+itself (item budget $5). Label <code>night/ok</code>: the night shift runs items on the local model and stops at CP4.</p>"""
 
 LIVE_JS = """
 (function(){

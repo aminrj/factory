@@ -315,6 +315,28 @@ class PlaceHoldoutTests(unittest.TestCase):
             self.assertTrue((wt / "tests" / "test_issue_70.py").exists())
             self.assertEqual(len(moved), 2)
 
+    def test_the_test_file_written_in_thoughts_moves_to_the_holdout_folder(self) -> None:
+        # the spec prompt asks for thoughts/N/test_issue_N.py: agents may not write inside tests/holdout/ (#32)
+        with tempfile.TemporaryDirectory() as tmp:
+            wt = Path(tmp)
+            env = {**os.environ, "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": "x@x", "GIT_COMMITTER_NAME": "x",
+                   "GIT_COMMITTER_EMAIL": "x@x"}
+            subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True)
+            (wt / "README.md").write_text("x\n")
+            subprocess.run(["git", "add", "-A"], cwd=wt, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "base"], cwd=wt, check=True, env=env)
+            base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True).stdout.strip()
+            (wt / "thoughts" / "32").mkdir(parents=True)
+            (wt / "thoughts" / "32" / "spec.md").write_text("# Spec\n")
+            (wt / "thoughts" / "32" / "test_issue_32.py").write_text("def test_ac1():\n    assert False\n")
+            with mock.patch.dict(os.environ, env):
+                dispatch.place_holdout_tests(wt, 32, base)
+            self.assertTrue((wt / "tests" / "holdout" / "test_issue_32.py").exists())
+            self.assertFalse((wt / "thoughts" / "32" / "test_issue_32.py").exists())
+            self.assertTrue((wt / "thoughts" / "32" / "spec.md").exists())
+            tracked = subprocess.run(["git", "ls-files"], cwd=wt, capture_output=True, text=True).stdout
+            self.assertIn("tests/holdout/test_issue_32.py", tracked)
+
 
 class GateEvasionTests(unittest.TestCase):
     """brevkoll#26: the local model hid tests from the "new tests must fail on main" gate instead of saying the plan
