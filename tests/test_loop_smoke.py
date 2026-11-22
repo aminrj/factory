@@ -115,6 +115,7 @@ class LoopSmokeTests(unittest.TestCase):
             mock.patch.object(orchestrate, "refresh_board"), mock.patch.object(orchestrate, "commit_ops"),
             mock.patch.object(orchestrate, "notify", new=self.notify), mock.patch.object(orchestrate, "log"),
             mock.patch.object(orchestrate, "dispatch", side_effect=lambda ctx, step, note=None: self.dispatched.append(step) or ""),
+            mock.patch.object(orchestrate, "FULL_GATES", True),  # these tests stop at CP2; test_loop_gates covers the default
         ]
         for p in patches:
             p.start()

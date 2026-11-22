@@ -15,7 +15,6 @@ Run it by hand or from cron on my machine, then commit and push. Public links po
 from __future__ import annotations
 
 import json
-import os
 import re
 import statistics
 import sys

@@ -488,11 +488,36 @@ def after_gate1(ctx: Ctx) -> None:
     ctx.record_minutes("spec")
     dispatch(ctx, "threat-model")
     ctx.g.set_stage(ctx.repo, ctx.n, "spec-ready")
+    if not FULL_GATES:
+        return through_to_plan(ctx)
     checkpoint(ctx, "2", "threat model, you decide every row",
                f"I drafted the threat model: {ctx.file_link('threat-model.md')}\n\n"
                "Reply `/go` to accept it as it is (I mark the remaining `PROPOSED` rows `ACCEPTED`). To decide a row "
                "differently, edit it first (`CHANGED: ...` or `REJECTED`, the pencil icon on that page works), then `/go`.",
                "after_gate2")
+
+
+# One stop between the spec and the plan instead of three (2026-11-22: "it only produces artefacts that are not code").
+# After the owner's CP1 `/go`, threat model, research and plan run back to back and Checkpoint 3 shows all three.
+# FACTORY_FULL_GATES=on keeps the separate threat-model (CP2) and questions (2b) stops.
+FULL_GATES = os.environ.get("FACTORY_FULL_GATES", "off") == "on"
+
+
+def through_to_plan(ctx: Ctx) -> None:
+    tm = ctx.branch_file("threat-model.md")
+    rows = len(re.findall(r"\bPROPOSED\b", tm))
+    if rows:
+        word = "ACCEPTED (night policy)" if ctx.auto else "ACCEPTED (provisional, shown at Checkpoint 3)"
+        approve(ctx, "threat-model.md", lambda t: re.sub(r"\bPROPOSED\b", word, t), f"threat model ({rows} rows, provisional)")
+    dispatch(ctx, "research")
+    qs = open_questions(ctx.branch_file("research.md"))
+    extra = (f"Threat model ({rows} rows accepted provisionally): {ctx.file_link('threat-model.md')}. To decide a row "
+             "differently, edit it before `/go`.\n\n")
+    if qs:
+        extra += ("Research raised questions; the plan defers them unless you answer in a comment and `/rework`:\n"
+                  + "\n".join(f"- {q}" for q in qs[:8]) + "\n\n")
+    dispatch(ctx, "plan")
+    plan_checkpoint(ctx, extra)
 
 
 def after_gate2(ctx: Ctx) -> None:
@@ -525,10 +550,10 @@ def plan_and_checkpoint(ctx: Ctx, note: str | None = None) -> None:
     plan_checkpoint(ctx)
 
 
-def plan_checkpoint(ctx: Ctx) -> None:
+def plan_checkpoint(ctx: Ctx, extra: str = "") -> None:
     n_ph = phases(ctx.branch_file("plan.md"))
     checkpoint(ctx, "3", "approve the plan or send it back",
-               f"Plan with {n_ph} phases: {ctx.file_link('plan.md')}\n\n"
+               f"{extra}Plan with {n_ph} phases: {ctx.file_link('plan.md')}\n\n"
                "- **Build it:** reply `/go` (I record your approval in the plan).\n"
                "- **Change it:** reply `/rework <what to change>`. The planner gets your note, your comments and any edits "
                "you made to `plan.md`, and writes a new draft.",
@@ -949,9 +974,9 @@ def command_options(body: str) -> commands.Parsed:
     return commands.Parsed()
 
 
-def refuse(ctx: Ctx, cmd_id: int, reason: str, fix: str) -> None:
+def refuse(ctx: Ctx, cmd_id: int, reason: str, fix: str, also: str = "") -> None:
     """A command that cannot run gets this reply on the tick that sees it, and a push: never silence."""
-    ctx.comment(f"{NOTICE_PREFIX} 🛑 Refused (comment {cmd_id}): {reason}.\n\nTo fix: {fix}")
+    ctx.comment(f"{NOTICE_PREFIX} 🛑 Refused (comment {cmd_id}){also}: {reason}.\n\nTo fix: {fix}")
     notify(f"{ctx.app}: command refused", f"{ctx.app}#{ctx.n}: {reason}", priority=4,
            click=ctx.url(f"/issues/{ctx.n}"))
     log(f"{ctx.app}#{ctx.n}: refused comment {cmd_id}: {reason}")
@@ -964,17 +989,26 @@ def decide(g: Gitea, repo: str, n: int) -> tuple[dict, dict, str, int | None] | 
     if pivot is None or not pivot["body"].startswith(CP_PREFIX):
         return None
     answered = answered_ids(mine)
-    for c in mine:
-        if c["id"] <= pivot["id"] or c["id"] in answered or not by_owner(g, c):
-            continue
+    cmds = [c for c in mine if c["id"] > pivot["id"] and c["id"] not in answered and by_owner(g, c)
+            and is_command(c["body"])]
+    if cmds:
+        # The owner's latest word wins, and `/stop` beats everything. 2026-11-22 (brevkoll#29): a queued `/go` waited
+        # 19 minutes for the busy local lane; the owner sent `/go model=fast` to use the cloud, as the factory had told
+        # them to, and the earlier `/go` ran on the local model anyway while the override was "not acted on".
+        stops = [c for c in cmds if STOP.match(c["body"])]
+        c = stops[-1] if stops else cmds[-1]
+        c = {**c, "covers": [x["id"] for x in cmds if x["id"] != c["id"]]}
         if m := GO.match(c["body"]):
             minutes = MINUTES.search(m.group(1))
             return pivot, c, "go", int(minutes.group(1)) if minutes else None
-        if STOP.match(c["body"]):
-            return pivot, c, "stop", None
-        if REWORK.match(c["body"]):
-            return pivot, c, "rework", None
+        return pivot, c, "stop" if STOP.match(c["body"]) else "rework", None
     return night_command(g, repo, n, pivot, mine)
+
+
+def covered(cmd: dict) -> str:
+    """The earlier commands this one replaces, written so answered_ids() counts them as answered (no "not acted on")."""
+    ids = cmd.get("covers") or []
+    return f", replacing the earlier {' '.join(f'(comment {i})' for i in ids)}" if ids else ""
 
 
 NIGHT = {"taken": False}  # one night-shift action per tick (reset in run_command)
@@ -1002,8 +1036,8 @@ class StopRequested(Exception):
         self.comment_id = comment_id
 
 
-def stop_item(ctx: Ctx, marker: dict[str, str], comment_id: int, where: str = "") -> None:
-    ctx.comment(f"{CLAIM_PREFIX} Stopped by /stop (comment {comment_id}){where}. Nothing more will run for this issue.")
+def stop_item(ctx: Ctx, marker: dict[str, str], comment_id: int, where: str = "", also: str = "") -> None:
+    ctx.comment(f"{CLAIM_PREFIX} Stopped by /stop (comment {comment_id}){also}{where}. Nothing more will run for this issue.")
     if marker.get("stop") == "kill":
         ctx.g.set_stage(ctx.repo, ctx.n, "killed")
     stage_down(ctx.app)
@@ -1098,6 +1132,16 @@ def model_switch_pending(g: Gitea) -> str:
     return str(cur.get("target") or "") if fresh else ""
 
 
+def resume_of(pivot: dict, marker: dict[str, str]) -> str:
+    """The handler a `/go` runs at this checkpoint. Old `-failed` checkpoints said `manual` (a dead end: brevkoll#26);
+    their label still names the step, so `/go` tries it once more like the new ones."""
+    handler = marker.get("resume", "")
+    label = night.checkpoint_label(pivot["body"])
+    if handler == "manual" and label.endswith("-failed") and label.removesuffix("-failed") in HANDLERS:
+        return label.removesuffix("-failed")
+    return handler
+
+
 def hand_off(g: Gitea, repo: str, n: int) -> str:
     """The tick never runs a step itself (scripts/lanes.py): it starts the item in its lane's own process, or leaves the
     command waiting when the lane is full. Quick answers (a refusal, /stop, a manual gate) are given right here."""
@@ -1110,7 +1154,7 @@ def hand_off(g: Gitea, repo: str, n: int) -> str:
     pivot, cmd, kind, _ = d
     opts = command_options(cmd["body"])
     marker = parse_marker(pivot["body"])
-    quick = (kind == "stop" or bool(opts.errors) or marker.get("resume") == "manual"
+    quick = (kind == "stop" or bool(opts.errors) or resume_of(pivot, marker) == "manual"
              or (kind == "rework" and marker.get("rework") != "ok"))
     if quick:
         return process_inline(g, repo, n)
@@ -1119,7 +1163,7 @@ def hand_off(g: Gitea, repo: str, n: int) -> str:
         return f"queued: the local model is being switched to `{pending}` (/llm on the status issue)"
     if not lanes.has_room(STATE, lane):
         return f"queued: the {lane} lane is full ({lanes.describe(lanes.busy(STATE, lane))})"
-    rec = lanes.spawn(STATE, app, n, lane, ["run", app, str(n)], marker.get("resume", "a step"),
+    rec = lanes.spawn(STATE, app, n, lane, ["run", app, str(n)], resume_of(pivot, marker) or "a step",
                       HQ / "scripts" / "orchestrate.py")
     log(f"{app}#{n}: started in the {lane} lane ({rec['unit']})")
     return f"started in the {lane} lane"
@@ -1152,18 +1196,19 @@ def process_inline(g: Gitea, repo: str, n: int) -> str:
     ctx.auto = bool(auto)
     opts = command_options(cmd["body"])
     if opts.errors:
-        refuse(ctx, cmd["id"], "; ".join(opts.errors), f"send the command again without that option. Accepted: {commands.USAGE}.")
+        refuse(ctx, cmd["id"], "; ".join(opts.errors), f"send the command again without that option. Accepted: {commands.USAGE}.",
+               also=covered(cmd))
         return "refused"
     ctx.model = "local" if auto else (opts.model or commands.DEFAULT_MODEL)  # the night shift never spends credit
     if kind == "stop":
-        stop_item(ctx, marker, cmd["id"])
+        stop_item(ctx, marker, cmd["id"], also=covered(cmd))
         return "stopped"
-    handler = marker.get("resume")
+    handler = resume_of(pivot, marker)
     if kind == "rework":
         if marker.get("rework") != "ok":
             # a notice, not a claim: a claim would become the pivot and hide the owner's next /go
             refuse(ctx, cmd["id"], "`/rework` only works at the plan checkpoint and the review checkpoint",
-                   "reply `/go` to continue, or `/stop`")
+                   "reply `/go` to continue, or `/stop`", also=covered(cmd))
             return "ignored"
         st = ctx.state()
         rw = REWORK.match(cmd["body"])
@@ -1184,7 +1229,7 @@ def process_inline(g: Gitea, repo: str, n: int) -> str:
                     "You review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
     else:
         ctx.comment(f"{CLAIM_PREFIX} Picked up `/{'rework' if kind == 'rework' else 'go'}` (comment {cmd['id']}"
-                    f"{f', {minutes} min' if minutes is not None else ''}). Running `{handler}` on model "
+                    f"{f', {minutes} min' if minutes is not None else ''}){covered(cmd)}. Running `{handler}` on model "
                     f"`{ctx.model or 'default'}`.")
     log(f"{app}#{n}: /go (comment {cmd['id']}, minutes={minutes}, model={ctx.model}) -> {handler}")
     if auto:
@@ -1214,8 +1259,11 @@ def run_handler(g: Gitea, repo: str, n: int, ctx: Ctx, marker: dict[str, str], h
             return f"blocked:{cls.group(1)}"
         prior = consecutive_failures(g, repo, n, handler)
         if prior >= MAX_RETRIES:
-            checkpoint(ctx, f"{handler}-failed", "retries used up, a session is needed",
-                       f"`{handler}` failed {prior + 1} times. Last error:\n\n```\n{e}\n```", "manual")
+            # Not a dead end: `/go` tries once more (the owner may have fixed something, or wants the cloud). On
+            # brevkoll#26 `/go model=fast` here got "nothing automated is left" (2026-11-22).
+            checkpoint(ctx, f"{handler}-failed", "retries used up",
+                       f"`{handler}` failed {prior + 1} times. Last error:\n\n```\n{e}\n```\n\nReply `/go` to try once "
+                       "more (`/go model=fast` to use Claude), or `/stop`.", handler)
         else:
             checkpoint(ctx, f"{handler}-retry", "a step failed",
                        f"Diagnosis:\n\n```\n{e}\n```\n\nReply `/go` to retry `{handler}` (retry {prior + 1} of "

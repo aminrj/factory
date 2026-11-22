@@ -150,6 +150,55 @@ class GateTests(unittest.TestCase):
         self.assertIn("CHECKPOINT 2b", self.bot())
         self.assertIn("Is X in scope?", self.bot())
 
+    def test_cp1_go_runs_threat_model_research_and_plan_and_stops_once_at_cp3(self) -> None:
+        self.commit_file("spec.md", "# Spec\n\nStatus: draft\n")
+        self.checkpoint("after_gate1", "1")
+        self.agent_files.update({"threat-model": "| R1 | PROPOSED |\n| R2 | PROPOSED |\n",
+                                 "research": "# R\n\n## Open questions for the human\n\n- Is X in scope?\n", "plan": PLAN})
+        self.assertEqual(self.go(), "ran after_gate1")
+        self.assertEqual(self.steps(), ["threat-model", "research", "plan"])
+        text = self.bot()
+        self.assertIn("CHECKPOINT 3", text)
+        self.assertIn("2 rows accepted provisionally", text)
+        self.assertIn("Is X in scope?", text)
+        tm = git(self.clone, "show", "origin/agent/issue-1:thoughts/1/threat-model.md")
+        self.assertNotIn("PROPOSED", tm)
+        self.assertEqual(sum(1 for c in self.g.comments if c["body"].startswith("🛑")), 2)  # CP1 (fixture) and CP3
+
+    def test_the_latest_command_wins_and_covers_the_earlier_one(self) -> None:
+        # brevkoll#29: a queued `/go` ran on the local model although the owner then sent `/go model=fast`
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "2b")
+        self.agent_files["plan"] = PLAN
+        self.g.comment("owner/app", 1, "/go")
+        self.g.comment("owner/app", 1, "/go model=fast")
+        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran after_research_questions")  # type: ignore[arg-type]
+        self.assertEqual(self.calls[0]["model"], "fast")
+        claim = next(c["body"] for c in self.g.comments if c["body"].startswith("▶"))
+        self.assertIn("replacing the earlier (comment", claim)
+        orchestrate.answer_unknown_commands(self.g, "owner/app", 1)  # type: ignore[arg-type]
+        self.assertFalse(any("Not acted on" in c["body"] for c in self.g.comments))
+
+    def test_stop_beats_a_later_go(self) -> None:
+        self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "/stop")
+        self.g.comment("owner/app", 1, "/go")
+        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "stopped")  # type: ignore[arg-type]
+
+    def test_go_at_a_failed_checkpoint_tries_again(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "after_research_questions-failed")
+        self.agent_files["plan"] = PLAN
+        self.assertEqual(self.go("/go model=fast"), "ran after_research_questions")
+        self.assertEqual(self.steps(), ["plan"])
+
+    def test_go_at_an_old_style_failed_checkpoint_tries_again_too(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.g.comment("owner/app", 1, "🛑 CHECKPOINT after_research_questions-failed: retries used up\n\n"
+                                       "<!--factory:resume=manual;stop=-->")
+        self.agent_files["plan"] = PLAN
+        self.assertEqual(self.go("/go"), "ran after_research_questions")
+
     def test_research_without_questions_goes_straight_to_the_plan(self) -> None:
         self.commit_file("threat-model.md", "| R1 | ACCEPTED |\n")
         self.checkpoint("after_gate2")

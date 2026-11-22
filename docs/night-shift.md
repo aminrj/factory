@@ -10,11 +10,16 @@ is your `/go` on that issue. Edit a file first only when you want something diff
 
 | CP | What waits for you | What `/go` means | What runs after your `/go` |
 |---|---|---|---|
-| **1** spec | `thoughts/N/spec.md` and `tests/holdout/` on the branch | this is the right change, and the tests check it | An agent drafts the threat model |
-| **2** threat model | `thoughts/N/threat-model.md` | accept every row still `PROPOSED` (rows you changed to `CHANGED: ...` or `REJECTED` stay as you wrote them) | An agent researches the code base |
-| **2b** questions (only if research raised any) | the open questions in `research.md` | go on; answer in a comment first if you want (unanswered questions are deferred) | An agent writes the plan |
-| **3** plan | `thoughts/N/plan.md` | build this plan (`/rework <note>` to change it) | The build: one agent run per phase, CI after each, then validation and staging |
+| **1** spec | `thoughts/N/spec.md` and `tests/holdout/` on the branch | this is the right change, and the tests check it | Threat model, research and plan, back to back |
+| **3** plan | `thoughts/N/plan.md`, with the threat model (rows accepted provisionally) and the research questions | build this plan (`/rework <note>` to change it; edit a threat-model row first to decide it differently) | The build: one agent run per phase, local checks and self-fix, CI, then validation and staging |
 | **4** review | the pull request, all checks green, the staged build to try on the phone | (merge it yourself first) the merge is done | Push to the GitHub mirror, remove the staged build |
+
+With `FACTORY_FULL_GATES=on` two more stops come back between CP1 and CP3:
+
+| CP | What waits for you | What `/go` means |
+|---|---|---|
+| **2** threat model | `thoughts/N/threat-model.md` | accept every row still `PROPOSED` (rows you changed stay as you wrote them) |
+| **2b** questions (only if research raised any) | the open questions in `research.md` | go on; unanswered questions are deferred |
 
 Checkpoints whose label ends in `-retry` (a step failed, retry budget 2), `-blocked` (the model, the credit or the login,
 no retry spent), `-fix` (something only you can fix) or `-failed` (retries used up) are the same gates after a problem.

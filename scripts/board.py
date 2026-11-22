@@ -172,6 +172,9 @@ def esc(x: object) -> str:
 
 
 CSS = """
+.live .act{font-weight:600;margin:.3em 0}.live ul.todo{margin:.3em 0;padding-left:1.1em;list-style:none}
+.live ul.todo li{margin:.1em 0}.live .files{font-size:.85em;opacity:.85;word-break:break-all}
+.live pre{white-space:pre-wrap;font-size:.8em;max-height:16em;overflow:auto}
 :root{--bg:#0f172a;--panel:#1e293b;--card:#273449;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#38bdf8;
 --ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--you:#c084fc}
 @media (prefers-color-scheme: light){:root{--bg:#f1f5f9;--panel:#fff;--card:#f8fafc;--line:#cbd5e1;--text:#0f172a;
@@ -223,6 +226,24 @@ GATES = """<table><tr><th>CP</th><th>What waits for you</th><th>What you decide<
 <b>-fix</b> something only you can fix · <b>-failed</b> retries used up. Commands: <code>/go</code> (local model;
 <code>model=smart|fast|cheap</code> for Claude; <code>minutes=N</code> optional), <code>/rework &lt;note&gt;</code> (CP3, CP4),
 <code>/stop</code>. Label <code>night/ok</code>: the night shift passes CP1 to CP3 on the local model and stops at CP4.</p>"""
+
+LIVE_JS = """
+(function(){var box=document.getElementById('live'),body=document.getElementById('livebody');
+function e(t){var d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML}
+function mins(s){var m=Math.floor((Date.now()/1000-s)/60);return m<1?'<1 min':m+' min'}
+function draw(j){var items=(j&&j.items)||[];box.hidden=!items.length;body.innerHTML=items.map(function(it){
+var icon={completed:'✅',in_progress:'▶️',pending:'⬜'};
+var todos=(it.todos||[]).map(function(t){return '<li>'+(icon[t.status]||'⬜')+' '+e(t.text)+'</li>'}).join('');
+var files=(it.files||[]).slice(-8).map(function(f){return '<code>'+e(f)+'</code>'}).join(' ');
+return "<div class='card live'><div class='k'><b>"+e(it.app)+'#'+e(it.n)+'</b> · '+e(it.step)+' · '+e(it.model)+
+' · '+mins(it.started)+' · turn '+e(it.turns)+(it.round>1?' · self-fix round '+(it.round-1):'')+'</div>'+
+"<div class='act'>"+e(it.action)+'</div>'+(todos?'<ul class=todo>'+todos+'</ul>':'')+
+(files?"<div class='files'>files: "+files+'</div>':'')+
+"<details><summary>recent output</summary><pre>"+e((it.recent||[]).join('\\n'))+'</pre>'+
+"<a href='live/"+e(it.app)+'-'+e(it.n)+".log' target='_blank'>full log</a></details></div>"}).join('')}
+function tick(){fetch('live/index.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null}).then(draw)
+.catch(function(){})}tick();setInterval(tick,4000)})();
+"""
 
 JS = """
 (function(){var q=document.getElementById('q'),chips=[].slice.call(document.querySelectorAll('.chip[data-f]')),f='all';
@@ -306,6 +327,8 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
     for name, value, level in health:
         out.append(f"<span class='pill'>{esc(name)}: <b class='{level}'>{esc(value)}</b></span>")
     out.append("</div>")
+    # Live: what each running agent does right now (scripts/live.py writes live/index.json; refreshed every 4 s)
+    out.append("<section id='live' hidden><h2>🔧 Working now</h2><div id='livebody'></div></section>")
     if busy or queued:
         out.append("<section><details open><summary>⏳ What the foreman is doing, and what waits</summary>")
         if busy:
@@ -362,7 +385,7 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
     out.append(f"<section><details><summary>What the checkpoints mean</summary>{GATES}</details></section>")
     if events:
         out.append("<section><details><summary>Last events</summary><pre>" + esc("\n".join(events)) + "</pre></details></section>")
-    out.append(f"<script>{JS}</script></body></html>")
+    out.append(f"<script>{JS}</script><script>{LIVE_JS}</script></body></html>")
     return "\n".join(out)
 
 
