@@ -1,13 +1,13 @@
 # Board
 
-_Generated 2026-11-22 16:35 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 16:57 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#14 | pick_up-retry: a step failed | 2026-11-22T16:31+00:00 | 0.1 |
-| brevkoll#7 | 2b: research raised questions | 2026-11-22T16:32+00:00 | 0.1 |
+| brevkoll#14 | pick_up-retry: a step failed | 2026-11-22T16:31+00:00 | 0.4 |
+| brevkoll#7 | 2b: research raised questions | 2026-11-22T16:32+00:00 | 0.4 |
 
 ## idea
 
@@ -19,13 +19,13 @@ _Generated 2026-11-22 16:35 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| Uploaded a 256ko pdf file to the app and got an error File too large. | brevkoll#29 |
 | Chunked uploads without Content-Length are only rejected after parsing | brevkoll#7 |
 
 ## building
 
 | Item | Issue |
 |---|---|
+| Uploaded a 256ko pdf file to the app and got an error File too large. | brevkoll#29 |
 | Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
 | Ready for the cluster: the model over mutual TLS, and a hardened deploy/ base | brevkoll#19 |
 | UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
