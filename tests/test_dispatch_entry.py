@@ -275,3 +275,15 @@ class SnapshotTests(unittest.TestCase):
         self.assertIn("please fix the date", text)
         self.assertNotIn("box.internal", text)
         self.assertNotIn("Picked up", text)
+
+
+class DraftStatusTests(unittest.TestCase):
+    def test_a_missing_status_line_is_added_as_draft_and_nothing_else_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = Path(tmp) / "spec.md"
+            spec.write_text("# Spec: #7 x\n\n**Real user:** the owner\n")
+            dispatch.add_draft_status(spec)
+            self.assertEqual(spec.read_text(), "# Spec: #7 x\n\nStatus: draft\n\n**Real user:** the owner\n")
+            spec.write_text("# Spec\n\nStatus: approved\n")
+            dispatch.add_draft_status(spec)
+            self.assertEqual(spec.read_text(), "# Spec\n\nStatus: approved\n")  # an existing line is never touched

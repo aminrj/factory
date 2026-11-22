@@ -259,6 +259,20 @@ def spec_prompt(n: int, repo: str, branch: str) -> str:
     )
 
 
+def add_draft_status(spec: Path) -> None:
+    """A draft without a `Status:` line gets `Status: draft` under its title (the only safe value: approving is the
+    owner's or the night policy's). brevkoll#7: a good 11-minute draft was refused for that line alone."""
+    if not spec.exists():
+        return
+    text = spec.read_text()
+    if re.search(r"^\**Status:\**\s*\w+", text, re.IGNORECASE | re.MULTILINE):
+        return
+    lines = text.splitlines()
+    at = next((i + 1 for i, line in enumerate(lines) if line.startswith("#")), 0)
+    lines[at:at] = ["", "Status: draft"]
+    spec.write_text("\n".join(lines) + "\n")
+
+
 def spec_draft_problem(wt: Path, n: int, head_before: str) -> str | None:
     spec = wt / "thoughts" / str(n) / "spec.md"
     if not spec.exists():
@@ -447,6 +461,7 @@ def main() -> None:
         declined(step, str(result.get("result") or ""))
 
     if step == "spec":
+        add_draft_status(wt / "thoughts" / str(n) / "spec.md")
         problem = spec_draft_problem(wt, n, head_before)
         if problem:
             die(problem)

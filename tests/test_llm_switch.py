@@ -130,3 +130,26 @@ class ForemanGateTests(unittest.TestCase):
             self.assertEqual(orchestrate.model_switch_pending(g), "code")  # type: ignore[arg-type]
             g.vars["FOREMAN_LLM_SWITCH"] = json.dumps({"target": "code", "since": time.time() - 4 * 3600})
             self.assertEqual(orchestrate.model_switch_pending(g), "")  # type: ignore[arg-type]
+
+
+class RunLlmTests(unittest.TestCase):
+    def test_status_is_printed_once(self) -> None:
+        done = mock.Mock(returncode=0, stdout="Serving:\n  :8081  qwen3.6-35b-a3b\n", stderr="")
+        with mock.patch.object(llm_switch.subprocess, "run", return_value=done) as run:
+            code, text = llm_switch.run_llm(["status"])
+        self.assertEqual((code, text.count("Serving:"), run.call_count), (0, 1, 1))
+
+
+class WrongPlaceTests(unittest.TestCase):
+    def test_llm_on_a_work_issue_points_to_the_status_issue(self) -> None:
+        import tempfile as tf
+        import test_loop_smoke as tls
+        g = tls.FakeGitea()
+        g.paged = lambda path: ([{"number": 69, "title": "Factory status"}] if "/factory/issues?" in path  # type: ignore[method-assign]
+                                else list(g.comments))
+        g.comment("owner/app", 1, "🛑 CHECKPOINT 3: x\n<!--factory:resume=after_gate3;stop=-->")
+        g.comment("owner/app", 1, "/llm code")
+        with tf.TemporaryDirectory() as tmp, mock.patch.object(orchestrate, "STATE", Path(tmp)), \
+                mock.patch.object(orchestrate, "REPLIED", Path(tmp) / "r.json"):
+            orchestrate.answer_unknown_commands(g, "owner/app", 1)  # type: ignore[arg-type]
+        self.assertIn("issues/69", g.comments[-1]["body"])

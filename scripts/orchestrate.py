@@ -1288,8 +1288,16 @@ def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
         if c["id"] <= pivot["id"] or key in seen or not c["body"].lstrip().startswith("/") or is_command(c["body"]):
             continue
         word = c["body"].lstrip().split()[0][:30]
-        g.comment(repo, n, f"{NOTICE_PREFIX} I did not understand `{word}` (comment {c['id']}), so I did nothing. "
-                           f"Accepted: {commands.USAGE}. A note may follow on the same line or below.")
+        if word.lower() == "/llm":  # brevkoll#26, 2026-11-22: sent on a work issue; it only works on the status issue
+            status = next((i["number"] for i in g.paged(f"/repos/{g.user}/factory/issues?state=open&type=issues")
+                           if i["title"] == "Factory status"), None)
+            where = (f"{g.repo_url(f'{g.user}/factory').removesuffix('.git')}/issues/{status}" if status
+                     else "the pinned Factory status issue")
+            g.comment(repo, n, f"{NOTICE_PREFIX} `/llm` (comment {c['id']}) switches the local model and works only on "
+                               f"the Factory status issue: {where} . Send it there; nothing was done here.")
+        else:
+            g.comment(repo, n, f"{NOTICE_PREFIX} I did not understand `{word}` (comment {c['id']}), so I did nothing. "
+                               f"Accepted: {commands.USAGE}. A note may follow on the same line or below.")
         seen.add(key)
     for c in unanswered_commands(g, repo, n, pivot):
         # Never invite a resend: the item has moved on, and the same words mean something else at the new checkpoint

@@ -86,6 +86,8 @@ def run_llm(args: list[str], timeout: int = 900) -> tuple[int, str]:
         code = proc.returncode
         if code != 0:
             break
+    if args == ["status"]:
+        return code, out[0][-2500:]
     status = subprocess.run(["bash", LLM, "status"], capture_output=True, text=True, timeout=60, check=False)
     return code, "\n".join([*out, "", "$ llm status", status.stdout.strip()]).strip()[-2500:]
 
