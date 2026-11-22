@@ -207,3 +207,40 @@ class SessionTests(Repo):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BROKEN = """<testsuites><testsuite><testcase classname="t" name="test_ac1"><failure message="AttributeError: 'list' object has
+ no attribute 'items'">def test_ac1():
+&gt;       headers = Headers([("content-length", "100")])
+
+tests/holdout/test_issue_7.py:106:
+.venv/lib/python3.13/site-packages/starlette/datastructures.py:531: in __init__
+    self._list = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+E   AttributeError: 'list' object has no attribute 'items'
+.venv/lib/python3.13/site-packages/starlette/datastructures.py:531: AttributeError</failure></testcase></testsuite></testsuites>"""
+
+MISSING = """<testsuites><testsuite><testcase classname="t" name="test_ac1"><failure message="ImportError: cannot import
+ name 'limit_body' from 'app.main' (/w/src/app/main.py)">E   ImportError: cannot import name 'limit_body' from 'app.main' (/w/src/app/main.py)
+tests/holdout/test_issue_7.py:129: ImportError</failure></testcase></testsuite></testsuites>"""
+
+PASSING = """<testsuites><testsuite><testcase classname="t" name="test_ac1"/></testsuite></testsuites>"""
+
+
+class BrokenAcceptanceTestTests(unittest.TestCase):
+    """brevkoll#7: acceptance tests that fail inside Starlette whatever the app does."""
+
+    def test_a_failure_raised_in_a_library_without_app_code_is_a_broken_test(
+        self,
+    ) -> None:
+        msg = dispatch.junit_problem(BROKEN)
+        self.assertIn("the acceptance tests are broken", msg or "")
+        self.assertIn("starlette/datastructures.py", msg or "")
+
+    def test_a_missing_feature_is_the_expected_failure(self) -> None:
+        self.assertIsNone(dispatch.junit_problem(MISSING, require_failing=True))
+
+    def test_tests_that_already_pass_prove_nothing_at_the_spec_step_only(self) -> None:
+        self.assertIn(
+            "already pass", dispatch.junit_problem(PASSING, require_failing=True) or ""
+        )
+        self.assertIsNone(dispatch.junit_problem(PASSING))

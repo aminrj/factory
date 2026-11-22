@@ -376,6 +376,52 @@ def holdout_collect_problem(wt: Path, n: int) -> str | None:
     return None
 
 
+LIBRARY_FRAME = re.compile(r"(site-packages|dist-packages|/lib/python3[\d.]*)/")
+
+
+def broken_test_problem(wt: Path, n: int, require_failing: bool = False) -> str | None:
+    """The acceptance tests must fail because the change is missing, not because the test itself is wrong.
+    brevkoll#7 (2026-11-22): the tests called Starlette's `Headers([...])` with a list and `Request(scope, headers=...)`;
+    both fail inside the library whatever the app does ("'list' object has no attribute 'items'"), so no implementation
+    could pass, and agent runs (one of 30 min) went round it because they may not touch tests/holdout/. A failure that
+    is raised inside an installed library and whose traceback never enters the app's own code (src/) is a broken test.
+    require_failing: on the current code (the spec step) tests that all pass prove nothing either."""
+    files = sorted(str(f.relative_to(wt)) for f in (wt / "tests" / "holdout").glob(f"test_issue_{n}*.py"))
+    if not files:
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        xml = Path(tmp) / "r.xml"
+        subprocess.run(["uv", "run", "pytest", "-q", "-p", "no:cacheprovider", "--tb=long", f"--junitxml={xml}", *files],
+                       cwd=wt, capture_output=True, text=True, check=False, timeout=600, env=check_env())
+        if not xml.exists():
+            return None  # pytest itself could not run here: the collect check reports that
+        report = xml.read_text()
+    return junit_problem(report, require_failing)
+
+
+def junit_problem(report: str, require_failing: bool = False) -> str | None:
+    """broken_test_problem's verdict on a pytest JUnit XML report (kept apart so it can be tested without pytest)."""
+    import xml.etree.ElementTree as ET  # noqa: PLC0415
+
+    cases = list(ET.fromstring(report).iter("testcase"))
+    bad, failed = [], 0
+    for case in cases:
+        for node in [*case.findall("failure"), *case.findall("error")]:
+            failed += 1
+            text = node.text or ""
+            where = re.findall(r"^(\S+?):\d+: \w+", text, re.MULTILINE)  # pytest ends each traceback with path:line: Error
+            in_app = re.search(r"(^|[\s\"/])src/", text, re.MULTILINE) is not None
+            if where and LIBRARY_FRAME.search(where[-1]) and not in_app:
+                bad.append(f"{case.get('name')}: {' '.join((node.get('message') or '').split())[:160]} "
+                           f"(raised in {where[-1].split('site-packages/')[-1]})")
+    if bad:
+        return ("the acceptance tests are broken: these fail inside a library, never reaching the app's code, so no "
+                "change can make them pass:\n" + "\n".join(f"- {b}" for b in bad[:6]))
+    if require_failing and cases and not failed:
+        return "the acceptance tests already pass on the current code, so they prove nothing about the change."
+    return None
+
+
 def spec_draft_problem(wt: Path, n: int, head_before: str) -> str | None:
     spec = wt / "thoughts" / str(n) / "spec.md"
     if not spec.exists():
@@ -438,6 +484,7 @@ def agent_forbidden(wt: Path, n: int) -> list[str]:
 
 
 EVASION_EXIT = 4  # keep in step with orchestrate.py
+BROKEN_TEST_EXIT = 5  # keep in step with orchestrate.py
 GATED_TEST_DIRS = tuple(os.environ.get("FACTORY_GATED_TEST_DIRS", "tests/unit/ tests/integration/").split())
 HIDES_TESTS = re.compile(r"\b(pytest_ignore_collect|collect_ignore(?:_glob)?|pytest_collection_modifyitems|"
                          r"pytest_deselected)\b|allow_module_level\s*=\s*True")
@@ -808,6 +855,12 @@ def main() -> None:
         with (wt / "thoughts" / str(n) / "issue.md").open("a") as fh:
             fh.write(f"\n## {heading} (data, written by the foreman)\n\n{scrub(args.note)}\n")
     head_before = run("git", "rev-parse", "HEAD", cwd=wt)
+    if step == "validate" or (step == "implement" and args.note and args.note_kind == "ci"):
+        # every phase is built: if the acceptance tests cannot pass whatever the code does, no agent run can help
+        if broken := broken_test_problem(wt, n):
+            print(f"I did not start an agent: {broken}\n\nOnly you may change tests/holdout/. Fix the test (or tell me "
+                  "in `/rework` what it should check), then reply `/go`; or `/stop`.", file=sys.stderr)
+            raise SystemExit(BROKEN_TEST_EXIT)
 
     prompt = (
         f"You are the factory agent for issue #{n} in repo {args.repo}. You are on branch {branch} in a git worktree.\n"
@@ -935,7 +988,8 @@ def main() -> None:
         place_holdout_tests(wt, n, head_before)
         for note in tidy_spec_draft(wt, n, head_before):
             print(note)
-        problem = spec_draft_problem(wt, n, head_before) or holdout_collect_problem(wt, n)
+        problem = (spec_draft_problem(wt, n, head_before) or holdout_collect_problem(wt, n)
+                   or broken_test_problem(wt, n, require_failing=True))
         if problem:
             die(problem)
         # Drafted by the factory for the owner, like new_change.py: one commit as factory-orchestrator, so later agent

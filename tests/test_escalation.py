@@ -115,3 +115,24 @@ class EscalationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrokenTestExitTests(unittest.TestCase):
+    def test_a_broken_acceptance_test_goes_to_the_owner_not_to_claude(self) -> None:
+        ctx = Ctx()
+        done = mock.Mock(
+            returncode=orchestrate.BROKEN_TEST_EXIT,
+            stdout="",
+            stderr="I did not start an agent: broken",
+        )
+        with (
+            mock.patch.object(orchestrate.subprocess, "run", return_value=done),
+            mock.patch.object(orchestrate, "log"),
+        ):
+            with self.assertRaisesRegex(
+                orchestrate.NeedsHuman, "did not start an agent"
+            ):
+                orchestrate.dispatch(ctx, "validate")  # type: ignore[arg-type]
+        self.assertEqual(
+            ctx.comments, []
+        )  # no switch to fast: the test is wrong, not the model

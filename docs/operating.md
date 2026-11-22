@@ -93,6 +93,10 @@ on another item runs in parallel with a local step.
   until its context was full (brevkoll#7); the model shim now cuts one answer at 16k tokens (about 4 minutes).
 - **The spec step cleans up after itself.** Files outside `thoughts/N/` and `tests/holdout/` are put back, and the
   acceptance tests must load before Checkpoint 1 is posted (otherwise the draft is written again).
+- **A broken acceptance test stops the item at once.** Before a CI-rework or validate run, the factory runs the
+  acceptance tests on the branch: a failure raised inside a library that never reaches the app's code (brevkoll#7:
+  `Headers([...])` with a list) means no code can pass, so no agent is started and a `-fix` checkpoint names the tests
+  and the library line. At the spec step, acceptance tests that already pass on the current code are drafted again.
 - **Staged builds are checked.** The review link names the machine that runs the build, and the factory checks that
   its container runs exactly that build before posting the link. A `localhost` link appears only where the staging
   machine is also where you browse (`STAGING_LOCAL_LINK=on` in its `staging.env`).
