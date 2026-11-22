@@ -38,7 +38,7 @@ import mirror  # noqa: E402
 import board  # noqa: E402
 import lease  # noqa: E402
 import orchestrate as o  # noqa: E402
-from gitea import Gitea, Unreachable  # noqa: E402
+from gitea import Gitea, Unreachable, by_owner, ours  # noqa: E402
 
 TITLE = "Factory status"
 FACTORY_REPOS = ("factory", "factory-template")  # published here; app repos only after a merge (checkpoint 4b)
@@ -98,9 +98,9 @@ def age(ts: str, now: datetime) -> str:
 def issue_view(g: Gitea, repo: str, n: int) -> dict:
     """The last checkpoint or claim of the foreman, and the owner's commands after it."""
     comments = g.paged(f"/repos/{repo}/issues/{n}/comments")
-    mine = [c for c in comments if c["user"]["login"] == g.user]
+    mine = [c for c in comments if ours(g, c)]
     pivot = next((c for c in reversed(mine) if c["body"].startswith((o.CP_PREFIX, o.CLAIM_PREFIX))), None)
-    owner = [c for c in mine if not c["body"].startswith((o.CP_PREFIX, o.CLAIM_PREFIX, o.NOTICE_PREFIX, "Agent step"))]
+    owner = [c for c in mine if by_owner(g, c) and not c["body"].startswith((o.CP_PREFIX, o.CLAIM_PREFIX, o.NOTICE_PREFIX, "Agent step"))]
     after = pivot["id"] if pivot else 0
     return {"repo": repo, "n": n, "app": repo.split("/")[1], "pivot": pivot,
             "running": bool(pivot and pivot["body"].startswith(o.CLAIM_PREFIX)),
@@ -167,7 +167,7 @@ def answer_closed(g: Gitea, closed: list[tuple[str, int, str]]) -> list[str]:
     for repo, n, closed_at in closed:
         for c in g.paged(f"/repos/{repo}/issues/{n}/comments"):
             key = f"{repo}#{c['id']}"
-            if (c["user"]["login"] != g.user or key in acked or not o.is_command(c["body"])
+            if (not by_owner(g, c) or key in acked or not o.is_command(c["body"])
                     or not closed_at or c["created_at"] < closed_at):
                 continue
             g.comment(repo, n, f"{o.NOTICE_PREFIX} Received `{first_line(c['body'], 60)}`, but this issue is closed, and "

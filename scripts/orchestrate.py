@@ -37,7 +37,7 @@ import commands  # noqa: E402
 import mirror  # noqa: E402
 import lease  # noqa: E402
 import night  # noqa: E402
-from gitea import Gitea, Unreachable, is_owner_email  # noqa: E402
+from gitea import Gitea, Unreachable, by_owner, is_owner_email, label_added_by_owner, ours  # noqa: E402
 
 WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
 HQ = Path(__file__).resolve().parent.parent
@@ -543,7 +543,7 @@ def owner_feedback(ctx: Ctx, typed: str = "") -> str:
     comments = ctx.g.paged(f"/repos/{ctx.repo}/issues/{ctx.n}/comments")
     # Since the planner last ran. Later "retry" or "fix" checkpoints must not hide what the owner said in between.
     last_plan_run = max((c["id"] for c in comments if c["body"].startswith("Agent step `plan`")), default=0)
-    said = [c["body"].strip() for c in comments if c["id"] > last_plan_run and c["user"]["login"] == ctx.g.user
+    said = [c["body"].strip() for c in comments if c["id"] > last_plan_run and by_owner(ctx.g, c)
             and not c["body"].startswith((CP_PREFIX, CLAIM_PREFIX, NOTICE_PREFIX, "Agent step")) and not is_command(c["body"])]
     if said:
         parts.append("The owner's comments on this issue since the planner last ran:\n" + "\n---\n".join(s[:1500] for s in said))
@@ -881,13 +881,13 @@ def refuse(ctx: Ctx, cmd_id: int, reason: str, fix: str) -> None:
 
 def decide(g: Gitea, repo: str, n: int) -> tuple[dict, dict, str, int | None] | None:
     """Return (checkpoint_comment, go_or_stop_comment, 'go'|'stop', minutes) if there is work to do."""
-    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if ours(g, c)]
     pivot = next((c for c in reversed(mine) if c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
     if pivot is None or not pivot["body"].startswith(CP_PREFIX):
         return None
     answered = answered_ids(mine)
     for c in mine:
-        if c["id"] <= pivot["id"] or c["id"] in answered:
+        if c["id"] <= pivot["id"] or c["id"] in answered or not by_owner(g, c):
             continue
         if m := GO.match(c["body"]):
             minutes = MINUTES.search(m.group(1))
@@ -908,6 +908,8 @@ def night_command(g: Gitea, repo: str, n: int, pivot: dict, mine: list[dict]) ->
     if not night.in_window(now):
         return None
     labels = {label["name"] for label in g.get(f"/repos/{repo}/issues/{n}/labels")}
+    if night.LABEL in labels and not label_added_by_owner(g, repo, n, night.LABEL):
+        labels.discard(night.LABEL)  # only the owner's label is an approval
     why = night.may_pass(pivot, parse_marker(pivot["body"]), labels, mine, now)
     if why is None:
         return None
@@ -943,7 +945,7 @@ def check_stop(ctx: Ctx) -> None:
 def consecutive_failures(g: Gitea, repo: str, n: int, handler: str) -> int:
     """Failures of this handler since the last agent step that worked. Two refusals from before a fix, then two successful
     phases, then a new problem is a first failure, not a third (it was counted as a third on brevkoll#15)."""
-    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if ours(g, c)]
     last_ok = max((c["id"] for c in mine if c["body"].startswith("Agent step")), default=0)
     return sum(1 for c in mine if c["id"] > last_ok and f"retry-of={handler}" in c["body"])
 
@@ -1189,8 +1191,8 @@ def is_command(body: str) -> bool:
 
 
 def owner_comments(g: Gitea, repo: str, n: int) -> list[dict]:
-    """The bot and the owner share one Gitea login, so the bot's own comments are told apart by their prefix."""
-    return [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user
+    """The owner's comments. With one shared login the bot's own comments are told apart by their prefix."""
+    return [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if by_owner(g, c)
             and not c["body"].startswith((CP_PREFIX, CLAIM_PREFIX, NOTICE_PREFIX, "Agent step"))]
 
 
@@ -1198,7 +1200,7 @@ def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
     """An owner comment that starts with `/` but is not a command gets one reply that says what is accepted."""
     seen = set(json.loads(REPLIED.read_text())) if REPLIED.exists() else set()
     comments = g.paged(f"/repos/{repo}/issues/{n}/comments")
-    pivot = next((c for c in reversed(comments) if c["user"]["login"] == g.user
+    pivot = next((c for c in reversed(comments) if ours(g, c)
                   and c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
     if pivot is None:
         return
@@ -1232,7 +1234,7 @@ def unanswered_commands(g: Gitea, repo: str, n: int, pivot: dict) -> list[dict]:
     """Owner commands older than the current checkpoint or claim that no comment of the foreman refers to: they were
     never acted on (comment 534 on brevkoll#15 was such a /go). Each gets one notice."""
     comments = g.paged(f"/repos/{repo}/issues/{n}/comments")
-    bot = [c for c in comments if c["user"]["login"] == g.user and c["body"].startswith((CP_PREFIX, CLAIM_PREFIX, NOTICE_PREFIX))]
+    bot = [c for c in comments if ours(g, c) and c["body"].startswith((CP_PREFIX, CLAIM_PREFIX, NOTICE_PREFIX))]
     referred = {int(x) for c in bot for x in ANSWERED.findall(c["body"])}
     cutoff = datetime.now(UTC).timestamp() - SKIPPED_WINDOW_H * 3600
     return [c for c in owner_comments(g, repo, n) if c["id"] < pivot["id"] and is_command(c["body"])
@@ -1243,7 +1245,7 @@ def waiting_list(g: Gitea) -> list[dict]:
     """Work items that wait for the owner: the last comment of the bot is a checkpoint nobody has answered yet."""
     out = []
     for repo, n in active_issues(g):
-        mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+        mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if ours(g, c)]
         pivot = next((c for c in reversed(mine) if c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
         if pivot is None or not pivot["body"].startswith(CP_PREFIX):
             continue
@@ -1287,7 +1289,7 @@ FAILED_CLAIM = re.compile(r"Unexpected error in `(\w+)`")
 def stuck_handler(g: Gitea, repo: str, n: int) -> str | None:
     """The handler an item was running when it stopped, if its last bot comment is a claim (`Picked up ... Running X` or
     `Unexpected error in X`) instead of a checkpoint. Such an item answers to no /go: decide() looks for a checkpoint."""
-    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+    mine = [c for c in g.paged(f"/repos/{repo}/issues/{n}/comments") if ours(g, c)]
     pivot = next((c for c in reversed(mine) if c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
     if pivot is None or not pivot["body"].startswith(CLAIM_PREFIX):
         return None
@@ -1422,7 +1424,9 @@ def night_tick(g: Gitea) -> None:
         for i in g.paged(f"/repos/{repo}/issues?state=open&type=issues&labels={night.LABEL}"):
             if night.LABEL not in {label["name"] for label in i.get("labels", [])}:
                 continue
-            mine = [c for c in g.paged(f"/repos/{repo}/issues/{i['number']}/comments") if c["user"]["login"] == g.user]
+            if not label_added_by_owner(g, repo, i["number"], night.LABEL):
+                continue
+            mine = [c for c in g.paged(f"/repos/{repo}/issues/{i['number']}/comments") if ours(g, c)]
             if any(c["body"].startswith((CP_PREFIX, CLAIM_PREFIX)) for c in mine):
                 continue  # already in the loop: decide() handles it
             NIGHT["taken"] = True

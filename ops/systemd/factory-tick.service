@@ -5,6 +5,7 @@ Description=Foreman tick (acts on a new /go or /stop in a work issue)
 Type=oneshot
 Environment=WORK=%h/git/software-factory
 EnvironmentFile=-%h/.config/factory/host.env
+EnvironmentFile=-%h/.config/factory/identity.env
 Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v24.14.1/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/git/software-factory
 ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/orchestrate.py tick

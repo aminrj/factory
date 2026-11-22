@@ -78,7 +78,10 @@ class Gitea:
     def __init__(self) -> None:
         self.base = _server_url()
         self._token = TOKEN_FILE.read_text().strip()
-        self.user: str = self.get("/user")["login"]
+        # Two logins (scripts/identity.py): the token is the factory's own (`factory-bot`), and FACTORY_OWNER names the
+        # owner, whose repos these are and whose commands count. One login (no FACTORY_OWNER): both are the token's.
+        self.bot: str = self.get("/user")["login"]
+        self.user: str = os.environ.get("FACTORY_OWNER") or self.bot
 
     def call(self, method: str, path: str, body: Any = None, ok: tuple[int, ...] = (200, 201, 204),
              text: bool = False) -> Any:
@@ -172,3 +175,29 @@ STAGES = {
     "shipped": ("5319E7", "A real user has it"),
     "killed": ("B60205", "Killed at the timebox or kill date"),
 }
+
+
+# ---------------------------------------------------------------- who wrote a comment
+# Fakes in the tests have only `user`; getattr keeps them working as one login.
+
+def ours(g: Any, c: dict) -> bool:
+    """Written by the owner or by the factory (the comments the foreman reads at all)."""
+    return c["user"]["login"] in (g.user, getattr(g, "bot", g.user))
+
+
+def by_owner(g: Any, c: dict) -> bool:
+    """Written by the owner: only these can be commands. With one login the factory's comments are told apart by their
+    prefix at the call site; with two logins a command from the factory's login is never obeyed."""
+    return c["user"]["login"] == g.user
+
+
+def label_added_by_owner(g: Any, repo: str, n: int, name: str) -> bool:
+    """Did the owner add `name` (the last change to that label)? With one login Gitea cannot tell, so True."""
+    if getattr(g, "bot", g.user) == g.user:
+        return True
+    last = None
+    for e in g.paged(f"/repos/{repo}/issues/{n}/timeline"):
+        if e.get("type") == "label" and (e.get("label") or {}).get("name") == name:
+            last = e
+    return bool(last and last.get("body") == "1" and (last.get("user") or {}).get("login") == g.user)
+

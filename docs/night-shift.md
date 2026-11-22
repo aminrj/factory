@@ -58,10 +58,10 @@ CP3 anyway), anything you have not decided yet.
 
 ### Trust and its limits
 
-- One Gitea login is shared by you and the foreman, so Gitea cannot show who added the label. Anyone who can make the
-  foreman's login add a label (a person with the token, or an agent that misuses it) can start night work. The damage
-  is bounded: local model, no merge, no deploy, CP4 always yours. A separate bot login (see the operating guide) closes
-  this.
+- **Who added the label.** With the factory's own Gitea user (`scripts/identity.py`), a label counts only if the
+  owner added it (Gitea's timeline says who), and a command from the factory's login is never obeyed. With the old
+  single shared login Gitea cannot tell, and anyone who can make that login add a label can start night work; the
+  damage is still bounded (local model, no merge, no deploy, CP4 always yours).
 - The same model family writes the holdout tests (spec step) and the code (implement step) of a night item. They run as
   separate agents with separate prompts, and the guard stops the implementer from editing the tests, but the tests are
   not independent of the model in the way your own CP1 is. Read the tests at CP4.

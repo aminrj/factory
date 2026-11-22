@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gitea import Gitea  # noqa: E402
+from gitea import Gitea, by_owner  # noqa: E402
 
 GO = re.compile(r"^\s*/go(?:\s+minutes=(\d+))?\s*$", re.IGNORECASE)
 STOP = re.compile(r"^\s*/stop\s*$", re.IGNORECASE)
@@ -46,7 +46,7 @@ def main() -> None:
     deadline = time.time() + a.max_hours * 3600
     while True:
         for c in g.paged(f"/repos/{repo}/issues/{a.issue}/comments"):
-            if c["id"] <= after or c["user"]["login"] != g.user:
+            if c["id"] <= after or not by_owner(g, c):
                 continue
             body = c["body"].strip()
             if m := GO.match(body):

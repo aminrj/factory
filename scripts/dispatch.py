@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from commands import MODELS  # noqa: E402
-from gitea import Gitea, is_owner_email  # noqa: E402
+from gitea import Gitea, is_owner_email, label_added_by_owner, ours  # noqa: E402
 
 STEPS = ["spec", "threat-model", "research", "plan", "implement", "validate"]
 ORCH_NAME, ORCH_EMAIL = "factory-orchestrator", "factory-orchestrator@users.noreply.local"
@@ -285,7 +285,7 @@ def changed_file_links(repo_url: str, branch: str, files: list[str], n: int, lim
 
 def write_issue_snapshot(g: Gitea, repo: str, n: int, wt: Path) -> None:
     issue = g.get(f"/repos/{repo}/issues/{n}")
-    comments = [c for c in g.get(f"/repos/{repo}/issues/{n}/comments") if c["user"]["login"] == g.user]
+    comments = [c for c in g.get(f"/repos/{repo}/issues/{n}/comments") if ours(g, c)]
     body = [
         f"# Issue #{n}: {issue['title']}",
         "",
@@ -342,7 +342,8 @@ def main() -> None:
 
     ensure_worktree(main_clone, branch, wt)
     labels = {lab["name"] for lab in g.get(f"/repos/{repo}/issues/{n}/labels")}
-    check_entry(step, wt, n, human_email, g.user, policy=POLICY_LABEL in labels)
+    policy = POLICY_LABEL in labels and label_added_by_owner(g, repo, n, POLICY_LABEL)
+    check_entry(step, wt, n, human_email, g.user, policy=policy)
     if args.dry_run:
         print(f"dry run ok: {step} may run on {branch} in {wt}")
         return
