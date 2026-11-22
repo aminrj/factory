@@ -74,8 +74,21 @@ def run_agent(clone: Path, issue: int) -> tuple[dict, float]:
     cmd = ["claude", "-p", "--output-format", "json", "--max-budget-usd", MAX_BUDGET, "--setting-sources", "project",
            "--strict-mcp-config", "--allowedTools", "Read,Grep,Glob",
            "--disallowedTools", "Bash,Write,Edit,NotebookEdit,WebFetch,WebSearch,Task"]
+    # Local model by default, like every agent step: the owner's cloud tokens are spent only when asked for
+    # (FACTORY_LOOKBACK_MODEL=smart|fast|cheap). dispatch.py owns the profiles and the shim.
+    import dispatch  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    profile = os.environ.get("FACTORY_LOOKBACK_MODEL", dispatch.DEFAULT_MODEL)
+    shim, url, served = dispatch.start_shim() if profile == "local" else (None, None, "")
+    extra, env = dispatch.model_args(profile, dict(os.environ), url, served)
+    cmd += extra
     t0 = time.time()
-    proc = subprocess.run(cmd, input=command_prompt(issue), cwd=clone, capture_output=True, text=True, timeout=TIMEOUT_S)
+    try:
+        proc = subprocess.run(cmd, input=command_prompt(issue), cwd=clone, capture_output=True, text=True,
+                              timeout=TIMEOUT_S, env=env)
+    finally:
+        if shim:
+            shim.kill()
     try:
         return json.loads(proc.stdout), round(time.time() - t0, 1)
     except json.JSONDecodeError:

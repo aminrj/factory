@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from commands import MODELS  # noqa: E402
+from commands import DEFAULT_MODEL, MODELS  # noqa: E402
 from gitea import Gitea, is_owner_email, label_added_by_owner, ours  # noqa: E402
 
 STEPS = ["spec", "threat-model", "research", "plan", "implement", "validate"]
@@ -329,7 +329,8 @@ def main() -> None:
     ap.add_argument("--note", help="implement or plan: a rework run; this text (CI failure, owner feedback; data) is added to issue.md")
     ap.add_argument("--note-kind", choices=["ci", "owner"], default="ci",
                     help="implement: whether the note is a CI failure or the owner's rework request")
-    ap.add_argument("--model", choices=sorted(MODELS), help="model profile (default: the Claude account default)")
+    ap.add_argument("--model", choices=sorted(MODELS), default=DEFAULT_MODEL,
+                    help=f"model profile (default: {DEFAULT_MODEL}; the cloud only when asked for)")
     args = ap.parse_args()
     n, step = args.issue, args.step
 
@@ -405,6 +406,8 @@ def main() -> None:
         "is_error": bool(result.get("is_error")) or proc.returncode != 0, "fallback": False,
         "model": args.model or "default",
     }
+    if args.model == "local":  # Claude Code prices every run as if Claude did it; on the local model nothing is spent
+        record["notional_cost_usd"], record["cost_usd"] = record["cost_usd"], 0.0
     if record["is_error"]:  # the class only: data/ is mirrored, an error text may hold internal names
         record["class"] = classify(str(result.get("result"))[-500:]) or "agent_error"
     DATA.mkdir(exist_ok=True)
@@ -460,8 +463,9 @@ def main() -> None:
     summary = str(result.get("result", ""))[:3500]
     changed = run("git", "diff", "--name-only", f"{head_before}..HEAD", cwd=wt).splitlines()
     links = changed_file_links(g.repo_url(repo), branch, changed, n)
+    spent = "local model, no cloud tokens" if args.model == "local" else f"cost {record['cost_usd']} USD"
     g.comment(repo, n, f"Agent step `{step}` finished in {duration / 60:.1f} min "
-                       f"(cost {record['cost_usd']} USD). PR: #{pr['number']}\n\n{summary}\n\n{links}\n"
+                       f"({spent}). PR: #{pr['number']}\n\n{summary}\n\n{links}\n"
                        f"- [Pull request: every change]({pr['html_url']}/files)")
     lid = g.label_id(repo, f"agent:{step}")
     labels = g.get(f"/repos/{repo}/issues/{n}/labels")

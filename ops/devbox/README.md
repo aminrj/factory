@@ -98,3 +98,16 @@ On the devbox: `printf 'FACTORY_ROLE=primary\nFACTORY_HOST=devbox\n' > ~/.config
 Limits: per-item state files (`state/<app>-<n>.json`: a rework note not yet used, staging details) stay on the host
 that wrote them. A takeover in the middle of a step resumes from the last checkpoint on the issue, like after a crash.
 Staged builds run on the host that staged them. `FACTORY_LEASE=off` turns the lease off (one host, as before).
+
+## Work lanes
+
+The tick never runs a step itself any more (`scripts/lanes.py`). When an item has a command to run, the tick starts
+`orchestrate.py run <app> <n>` as a transient systemd user unit (`factory-<app>-<n>-<time>`) in the item's lane and
+goes back to watching:
+
+- **local** (`FACTORY_LANE_LOCAL`, default 1): every `/go` without `model=`, every night-shift step and pick-up.
+- **cloud** (`FACTORY_LANE_CLOUD`, default 3): `model=smart|fast|cheap` only.
+
+A command whose lane is full waits; the status job tells you which item holds the lane. See what runs:
+`systemctl --user list-units 'factory-*'`, the lane records in `state/lanes/`, and the board. `FACTORY_LANES=off`
+in `host.env` runs every step inside the tick, as before.

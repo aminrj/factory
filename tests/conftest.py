@@ -21,3 +21,4 @@ def single_host(monkeypatch: pytest.MonkeyPatch) -> None:
     """The foreman lease (scripts/lease.py) is off unless a test turns it on: fakes of Gitea do not store variables."""
     monkeypatch.setenv("FACTORY_LEASE", "off")
     monkeypatch.setenv("FACTORY_NIGHT", "off")  # the night shift would act on its own at night; tests turn it on
+    monkeypatch.setenv("FACTORY_LANES", "off")  # steps run inside the tick unless a test starts lanes itself

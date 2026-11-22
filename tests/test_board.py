@@ -123,3 +123,14 @@ class BoardV2Tests(unittest.TestCase):
         self.assertIn("credit_exhausted", page)
         self.assertIn("What the checkpoints mean", page)
         self.assertIn("id='q'", page)  # the filter
+
+
+class CostTests(unittest.TestCase):
+    def test_local_runs_cost_nothing_whatever_claude_code_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "agent_runs.jsonl").write_text("\n".join(json.dumps(x) for x in [
+                {"ts": "2026-11-22T10:00:00Z", "model": "local", "cost_usd": 4.5, "step": "threat-model"},
+                {"ts": "2026-11-22T10:00:00Z", "model": "fast", "cost_usd": 0.7, "step": "plan"}]) + "\n")
+            s = board.analytics(d, NOW)
+        self.assertAlmostEqual(s["cost_7d"], 0.7)

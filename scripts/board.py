@@ -107,7 +107,7 @@ def card(issue: dict, repo: str, base_url: str, view: dict | None, runs: list[di
         "label": label, "why": why, "who": who, "since": _age(since, now) if since else "",
         "night": NIGHT_LABEL in labels, "pending": len(queued), "queued": queued, "app": app,
         "diagnosis": diagnosis(pivot["body"]) if pivot and col == "blocked" else "",
-        "cost": sum(float(r.get("cost_usd") or 0) for r in mine), "runs": len(mine),
+        "cost": sum(real_cost(r) for r in mine), "runs": len(mine),
         "agent_min": sum(float(r.get("duration_s") or 0) for r in mine) / 60,
     }
 
@@ -124,7 +124,7 @@ def analytics(data: Path, now: datetime) -> dict[str, Any]:
     count_model: dict[str, int] = defaultdict(int)
     for r in recent:
         m = str(r.get("model") or "default")
-        by_model[m] += float(r.get("cost_usd") or 0)
+        by_model[m] += real_cost(r)
         count_model[m] += 1
     by_step: dict[str, list[float]] = defaultdict(list)
     for r in recent:
@@ -152,6 +152,11 @@ def analytics(data: Path, now: datetime) -> dict[str, Any]:
         "human_min": dict(src),
         "waits": sorted(((g, len(v), sum(v) / len(v)) for g, v in by_gate.items()), key=lambda x: -x[2])[:6],
     }
+
+
+def real_cost(r: dict) -> float:
+    """What a run really cost: Claude Code prices local-model runs as if Claude had done them (2026-11-22)."""
+    return 0.0 if r.get("model") == "local" else float(r.get("cost_usd") or 0)
 
 
 def esc(x: object) -> str:

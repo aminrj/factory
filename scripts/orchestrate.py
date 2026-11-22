@@ -35,6 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commands  # noqa: E402
 import mirror  # noqa: E402
+import lanes  # noqa: E402
 import lease  # noqa: E402
 import night  # noqa: E402
 from gitea import Gitea, Unreachable, by_owner, is_owner_email, label_added_by_owner, ours  # noqa: E402
@@ -239,7 +240,7 @@ class Ctx:
         stage = next((label for label in labels if label.startswith("stage/")), "stage/?")
         return (f"_Board: {self.app}#{self.n} is `{stage}`. Agent so far: {len(runs)} runs, "
                 f"{sum(r.get('duration_s', 0) for r in runs) / 60:.1f} min, "
-                f"${sum(r.get('cost_usd') or 0 for r in runs):.2f}. Your time so far: "
+                f"${sum(0 if r.get('model') == 'local' else (r.get('cost_usd') or 0) for r in runs):.2f}. Your time so far: "
                 f"{sum(m['minutes'] for m in mins)} min._")
 
 
@@ -980,11 +981,42 @@ def consecutive_failures(g: Gitea, repo: str, n: int, handler: str) -> int:
 
 
 def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
-    app = repo.split("/")[1]
     if decide(g, repo, n) is None:
         return "waiting"
     if dry:
         return "would act"
+    if lanes.enabled():
+        return hand_off(g, repo, n)
+    return process_inline(g, repo, n)
+
+
+def hand_off(g: Gitea, repo: str, n: int) -> str:
+    """The tick never runs a step itself (scripts/lanes.py): it starts the item in its lane's own process, or leaves the
+    command waiting when the lane is full. Quick answers (a refusal, /stop, a manual gate) are given right here."""
+    app = repo.split("/")[1]
+    d = decide(g, repo, n)
+    if d is None:
+        return "waiting"
+    if lanes.item_running(STATE, app, n) or item_is_running(app, n):
+        return "busy"
+    pivot, cmd, kind, _ = d
+    opts = command_options(cmd["body"])
+    marker = parse_marker(pivot["body"])
+    quick = (kind == "stop" or bool(opts.errors) or marker.get("resume") == "manual"
+             or (kind == "rework" and marker.get("rework") != "ok"))
+    if quick:
+        return process_inline(g, repo, n)
+    lane = "local" if cmd.get("auto") else lanes.lane_of(opts.model or commands.DEFAULT_MODEL)
+    if not lanes.has_room(STATE, lane):
+        return f"queued: the {lane} lane is full ({lanes.describe(lanes.busy(STATE, lane))})"
+    rec = lanes.spawn(STATE, app, n, lane, ["run", app, str(n)], marker.get("resume", "a step"),
+                      HQ / "scripts" / "orchestrate.py")
+    log(f"{app}#{n}: started in the {lane} lane ({rec['unit']})")
+    return f"started in the {lane} lane"
+
+
+def process_inline(g: Gitea, repo: str, n: int) -> str:
+    app = repo.split("/")[1]
     STATE.mkdir(exist_ok=True)
     lock = (STATE / f"{app}-{n}.lock").open("w")
     try:
@@ -1385,12 +1417,23 @@ def main() -> None:
     r = sub.add_parser("run")
     r.add_argument("repo")
     r.add_argument("issue", type=int)
+    ad = sub.add_parser("adopt")
+    ad.add_argument("repo")
+    ad.add_argument("issue", type=int)
     sub.add_parser("status")
     a = ap.parse_args()
     try:
         g = Gitea()
-        if a.cmd == "run":
-            print(process(g, f"{g.user}/{a.repo}", a.issue))
+        if a.cmd in ("run", "adopt"):  # one item, inside this process (a lane's child, or a session by hand)
+            os.environ["FACTORY_CHILD"] = "1"
+            try:
+                if a.cmd == "run":
+                    print(process(g, f"{g.user}/{a.repo}", a.issue))
+                else:
+                    repo = f"{g.user}/{a.repo}"
+                    adopt(g, repo, a.issue, g.get(f"/repos/{repo}/issues/{a.issue}")["title"])
+            finally:
+                lanes.finished(STATE, a.repo, a.issue)
             return
         run_command(g, a)
     except Unreachable as e:
@@ -1450,7 +1493,7 @@ def night_tick(g: Gitea) -> None:
             g.ensure_label(repo, night.LABEL, "#6366f1", "Night shift may pass the gates before the code (docs/night-shift.md)")
         STATE.mkdir(parents=True, exist_ok=True)
         made.write_text("\n".join(repos))
-    if NIGHT["taken"] or not night.in_window(now):
+    if NIGHT["taken"] or not night.in_window(now) or (lanes.enabled() and not lanes.has_room(STATE, "local")):
         return
     for repo in repos:
         for i in g.paged(f"/repos/{repo}/issues?state=open&type=issues&labels={night.LABEL}"):
@@ -1462,7 +1505,13 @@ def night_tick(g: Gitea) -> None:
             if any(c["body"].startswith((CP_PREFIX, CLAIM_PREFIX)) for c in mine):
                 continue  # already in the loop: decide() handles it
             NIGHT["taken"] = True
-            adopt(g, repo, i["number"], i["title"])
+            if lanes.enabled():
+                if lanes.has_room(STATE, "local"):
+                    rec = lanes.spawn(STATE, repo.split("/")[1], i["number"], "local", ["adopt", repo.split("/")[1],
+                                      str(i["number"])], "spec (night pick-up)", HQ / "scripts" / "orchestrate.py")
+                    log(f"{repo}#{i['number']}: night pick-up started in the local lane ({rec['unit']})")
+            else:
+                adopt(g, repo, i["number"], i["title"])
             return
 
 

@@ -36,6 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mirror  # noqa: E402
 import board  # noqa: E402
+import commands  # noqa: E402
+import lanes  # noqa: E402
 import lease  # noqa: E402
 import orchestrate as o  # noqa: E402
 from gitea import Gitea, Unreachable, by_owner, ours  # noqa: E402
@@ -133,6 +135,16 @@ def ack_text(view: dict, cmd: dict, tick_s: int | None, running: dict | None) ->
                 "moves to a new checkpoint, and this command will not run there (the same words can mean something "
                 "else at the next checkpoint). Answer that checkpoint when it appears; `/stop` ends the run between two "
                 "phases.")
+    if lanes.enabled() and (o.GO.match(cmd["body"]) or o.REWORK.match(cmd["body"])):
+        opts = o.command_options(cmd["body"])
+        lane = lanes.lane_of(opts.model or commands.DEFAULT_MODEL)
+        if not opts.errors and not lanes.has_room(o.STATE, lane):
+            holders = lanes.describe(lanes.busy(o.STATE, lane))
+            other = ("To use the cloud lane instead, send it again with `model=fast` (spends Claude tokens)."
+                     if lane == "local" else "It starts when a cloud slot frees up.")
+            return (f"{o.NOTICE_PREFIX} Received `{word}`. The {lane} lane is busy with {holders}; this starts as "
+                    f"soon as it frees up. {other} Nothing to resend.")
+        return None
     if tick_s is not None and running and (running["app"], running["n"]) != (view["app"], view["n"]):
         return (f"{o.NOTICE_PREFIX} Received `{word}`. The foreman is busy with {running['app']}#{running['n']} "
                 f"(`{running['step']}`, {tick_s // 60} min so far) and acts on this right after it. Nothing to resend.")
@@ -223,7 +235,7 @@ def spend_today(now: datetime) -> dict[str, float]:
     for r in o.jsonl(o.DATA / "agent_runs.jsonl"):
         if str(r.get("ts", "")).startswith(day):
             m = str(r.get("model") or "default")
-            out[m] = out.get(m, 0.0) + float(r.get("cost_usd") or 0)
+            out[m] = out.get(m, 0.0) + board.real_cost(r)
     return out
 
 
@@ -394,6 +406,13 @@ def board_health(now: datetime, tick_s: int | None, beat_age: float | None, view
 
 
 def busy_text(tick_s: int | None, running: dict | None) -> str:
+    if lanes.enabled():
+        out = []
+        for lane in ("local", "cloud"):
+            recs = lanes.busy(o.STATE, lane)
+            out.append(f"{lane} lane {len(recs)}/{lanes.capacity(lane)}: {lanes.describe(recs)}")
+        return ("Each step runs in its own process, in a lane: " + "; ".join(out) + ". A command waits only when its "
+                "lane is full, and is told so.")
     if tick_s is None:
         return ""
     what = f"{running['app']}#{running['n']} (`{running['step']}`)" if running else "a step"
