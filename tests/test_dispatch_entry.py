@@ -387,3 +387,49 @@ class GateEvasionTests(unittest.TestCase):
             with self.assertRaises(orchestrate.GateEvasion) as caught:
                 orchestrate.dispatch(mock.Mock(app="app", n=1), "implement")
         self.assertIsInstance(caught.exception, orchestrate.NeedsHuman)
+
+
+class OwnerGoApprovalTests(unittest.TestCase):
+    """The owner's `/go` is the approval: the foreman commits `Status: approved` as factory-orchestrator with a trailer
+    naming the comment. The guard accepts it only when that comment is one of the owner's `/go` comments."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.wt = Path(self.tmp.name)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.wt)], check=True)
+        t = self.wt / "thoughts" / "1"
+        t.mkdir(parents=True)
+        (t / "spec.md").write_text("# Spec\n")
+        (t / "threat-model.md").write_text("| R1 | ACCEPTED |\n")
+        (t / "research.md").write_text("# R\n")
+        (t / "plan.md").write_text("# Plan\n\nStatus: approved\n")
+        env = {**os.environ, "GIT_AUTHOR_NAME": dispatch.ORCH_NAME, "GIT_AUTHOR_EMAIL": dispatch.ORCH_EMAIL,
+               "GIT_COMMITTER_NAME": dispatch.ORCH_NAME, "GIT_COMMITTER_EMAIL": dispatch.ORCH_EMAIL}
+        subprocess.run(["git", "add", "-A"], cwd=self.wt, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "#1 plan: approved by the owner's /go\n\nApproved-by-owner: comment 42"],
+                       cwd=self.wt, check=True, env=env)
+
+    def test_accepted_when_the_comment_is_the_owner_s_go(self) -> None:
+        dispatch.check_entry("implement", self.wt, 1, OWNER, owner_gos=frozenset({42}))
+
+    def test_refused_when_it_is_not(self) -> None:
+        with self.assertRaises(SystemExit):
+            dispatch.check_entry("implement", self.wt, 1, OWNER, owner_gos=frozenset({41}))
+
+
+class HoldoutFormatTests(unittest.TestCase):
+    def test_unformatted_holdout_tests_are_formatted_by_the_factory_not_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wt = Path(tmp)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(wt)], check=True)
+            (wt / "tests" / "holdout").mkdir(parents=True)
+            (wt / "tests" / "holdout" / "test_x.py").write_text("def test_x( ):\n    assert 1==1\n")
+            env = {**os.environ, "GIT_AUTHOR_NAME": "o", "GIT_AUTHOR_EMAIL": "o@x", "GIT_COMMITTER_NAME": "o",
+                   "GIT_COMMITTER_EMAIL": "o@x"}
+            subprocess.run(["git", "add", "-A"], cwd=wt, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "owner"], cwd=wt, check=True, env=env)
+            dispatch.check_holdout_formatted(wt)
+            self.assertIn("1 == 1", (wt / "tests" / "holdout" / "test_x.py").read_text())
+            log = dispatch.run("git", "log", "-1", "--format=%an|%s", cwd=wt)
+            self.assertEqual(log, f"{dispatch.ORCH_NAME}|tests/holdout: ruff format (mechanical, no test changed)")

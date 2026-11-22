@@ -2,16 +2,19 @@
 
 ## The checkpoints (CP1 to CP4)
 
-A work item is one Gitea issue. The foreman moves it through four checkpoints. At each one it posts a
-`🛑 CHECKPOINT` comment and waits for your answer: `/go`, `/rework <what is wrong>` (CP3 and CP4) or `/stop`.
+A work item is one Gitea issue. Comment `/go` on a new issue to start it. The foreman then moves it through four
+checkpoints. At each one it posts a `🛑 CHECKPOINT` comment and waits for your answer: `/go`, `/rework <what is
+wrong>` (CP3 and CP4) or `/stop`. At CP1 to CP3 your `/go` **is** the approval: the factory writes it into the file for
+you (a commit by factory-orchestrator with `Approved-by-owner: comment N`), and the guards accept it only when comment N
+is your `/go` on that issue. Edit a file first only when you want something different.
 
-| CP | What waits for you | What you decide | What runs after your `/go` |
+| CP | What waits for you | What `/go` means | What runs after your `/go` |
 |---|---|---|---|
-| **1** spec | `thoughts/N/spec.md` and `tests/holdout/` on the branch | Is this the right change, are the acceptance criteria and the tests right? You set `Status: approved` in the spec in a commit of your own. | An agent drafts the threat model |
-| **2** threat model | `thoughts/N/threat-model.md` | Every `PROPOSED` row becomes `ACCEPTED`, `CHANGED: ...` or `REJECTED` | An agent researches the code base |
-| **2b** questions (only if research raised any) | the open questions in `research.md` | Answer them in a comment, or `/go` without answers (the planner defers them) | An agent writes the plan |
-| **3** plan | `thoughts/N/plan.md` | Approve it (`Status: approved` in your own commit), or `/rework` | The build: one agent run per phase, CI after each, then validation and staging |
-| **4** review | the pull request, all checks green, the staged build to try on the phone | Merge it yourself, or `/rework` (staged again) | After the merge, `/go`: push to the GitHub mirror, remove the staged build |
+| **1** spec | `thoughts/N/spec.md` and `tests/holdout/` on the branch | this is the right change, and the tests check it | An agent drafts the threat model |
+| **2** threat model | `thoughts/N/threat-model.md` | accept every row still `PROPOSED` (rows you changed to `CHANGED: ...` or `REJECTED` stay as you wrote them) | An agent researches the code base |
+| **2b** questions (only if research raised any) | the open questions in `research.md` | go on; answer in a comment first if you want (unanswered questions are deferred) | An agent writes the plan |
+| **3** plan | `thoughts/N/plan.md` | build this plan (`/rework <note>` to change it) | The build: one agent run per phase, CI after each, then validation and staging |
+| **4** review | the pull request, all checks green, the staged build to try on the phone | (merge it yourself first) the merge is done | Push to the GitHub mirror, remove the staged build |
 
 Checkpoints whose label ends in `-retry` (a step failed, retry budget 2), `-blocked` (the model, the credit or the login,
 no retry spent), `-fix` (something only you can fix) or `-failed` (retries used up) are the same gates after a problem.

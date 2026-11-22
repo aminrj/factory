@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -100,6 +100,9 @@ class GateTests(unittest.TestCase):
 
     # -- helpers
     def commit_file(self, rel: str, text: str, email: str = BOT) -> None:
+        # like dispatch's worktree: fast-forward to what the foreman pushed (an approval) before committing
+        if git(self.clone, "ls-remote", "--heads", "origin", "agent/issue-1"):
+            git(self.clone, "pull", "-q", "--ff-only", "origin", "agent/issue-1")
         path = self.t / rel
         path.write_text(text)
         git(self.clone, "add", "-A")
@@ -132,15 +135,17 @@ class GateTests(unittest.TestCase):
         return [s for s, _ in self.dispatched]
 
     # -- gate 2: the owner decides every row
-    def test_threat_model_with_undecided_rows_is_refused_then_accepted(self) -> None:
-        self.commit_file("threat-model.md", "| R1 | PROPOSED |\n")
+    def test_go_accepts_the_undecided_rows_for_the_owner(self) -> None:
+        self.commit_file("threat-model.md", "| R1 | PROPOSED |\n| R2 | REJECTED |\n")
         self.checkpoint("after_gate2")
         self.agent_files["research"] = "# Research\n\n## Open questions for the human\n\n- Is X in scope?\n"
-        self.assertEqual(self.go(), "needs human")
-        self.assertIn("PROPOSED", self.bot())
-        self.assertEqual(self.dispatched, [])
-        self.commit_file("threat-model.md", "| R1 | ACCEPTED |\n", email=WEB_EDITOR)
         self.assertEqual(self.go(), "ran after_gate2")
+        tm = git(self.clone, "show", "origin/agent/issue-1:thoughts/1/threat-model.md")
+        self.assertIn("| R1 | ACCEPTED |", tm)
+        self.assertIn("| R2 | REJECTED |", tm)  # the owner's own decision stays
+        body = git(self.clone, "log", "-1", "--format=%an|%B", "origin/agent/issue-1", "--", "thoughts/1/threat-model.md")
+        self.assertTrue(body.startswith("factory-orchestrator|"))
+        self.assertIn("Approved-by-owner: comment ", body)
         self.assertEqual(self.steps(), ["research"])
         self.assertIn("CHECKPOINT 2b", self.bot())
         self.assertIn("Is X in scope?", self.bot())
@@ -163,14 +168,11 @@ class GateTests(unittest.TestCase):
         self.assertEqual(self.steps(), ["plan"])
         self.assertIn("CHECKPOINT 3", self.bot())
 
-    def test_unanswered_questions_get_one_nudge_then_the_owner_decides(self) -> None:
+    def test_go_without_answers_goes_on_at_once(self) -> None:
         self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_research_questions", "2b")
         self.agent_files["plan"] = PLAN
-        self.assertEqual(self.go("/go"), "needs human")  # no comment from the owner since the questions
-        self.assertIn("have not answered", self.bot())
-        self.assertEqual(self.dispatched, [])
-        self.assertEqual(self.go("/go"), "ran after_research_questions")  # the owner chose to go on without answers
+        self.assertEqual(self.go("/go"), "ran after_research_questions")  # no "are you sure?" checkpoint
         self.assertEqual(self.steps(), ["plan"])
 
     def test_answered_questions_go_straight_through(self) -> None:
@@ -253,8 +255,11 @@ class GateTests(unittest.TestCase):
 
     def test_a_failed_step_checkpoint_still_links_what_to_look_at(self) -> None:
         self.commit_file("plan.md", PLAN, email=self.AGENT)
+        self.commit_file("research.md", "# Research\n")
         self.checkpoint("after_gate3", "3")
-        self.assertEqual(self.go("/go"), "needs human")  # a draft plan: the options message
+        self.ci = [{"checks": "failure"}, {"checks": "failure"}]
+        self.go("/go")  # approved by the /go, built, CI stays red: a retry checkpoint
+        self.assertIn("CHECKPOINT", self.bot())
         self.assertIn(f"]({self.BASE}/thoughts/1/plan.md)", self.bot())
 
     # -- gate 3 and 4: build, red CI, rework, review
@@ -457,13 +462,14 @@ class GateTests(unittest.TestCase):
         self.assertIn("+palette: teal", self.dispatched[0][1] or "")
         self.assertEqual(self.dispatched.count(("implement", None)), 0)
 
-    def test_a_draft_plan_gets_options_not_an_error(self) -> None:
+    def test_go_on_a_draft_plan_approves_it_for_the_owner_and_builds(self) -> None:
         self.plan_draft_then_owner_edits("draft")
-        self.assertEqual(self.go("/go"), "needs human")
-        text = self.bot()
-        self.assertIn("Status: approved", text)
-        self.assertIn("/rework", text)
-        self.assertEqual(self.dispatched, [])
+        self.assertEqual(self.go("/go"), "ran after_gate3")
+        plan = git(self.clone, "show", "origin/agent/issue-1:thoughts/1/plan.md")
+        self.assertIn("Status: approved", plan)
+        body = git(self.clone, "log", "-1", "--format=%B", "origin/agent/issue-1", "--", "thoughts/1/plan.md")
+        self.assertIn("Approved-by-owner: comment ", body)
+        self.assertIn("implement", self.steps())
 
     def test_the_plan_checkpoint_offers_all_three_answers(self) -> None:
         self.commit_file("threat-model.md", "| R1 | ACCEPTED |\n")
@@ -471,7 +477,7 @@ class GateTests(unittest.TestCase):
         self.agent_files.update(research="# Research\n", plan=PLAN)
         self.go()
         text = self.bot()
-        for needle in ("Approve", "/rework", "Status: rework", "rework=ok"):
+        for needle in ("Build it", "`/go`", "/rework", "rework=ok"):
             self.assertIn(needle, text)
 
     def test_minutes_with_a_unit_suffix_are_read(self) -> None:

@@ -4,13 +4,25 @@ One page for everything you do or see while the factory runs. The path of an app
 [lifecycle.md](lifecycle.md); the checkpoints and the night shift in [night-shift.md](night-shift.md); host setup in
 [../ops/devbox/README.md](../ops/devbox/README.md).
 
+## Starting work
+
+Write the issue (a bug, a feature, a question), then comment **`/go`** under it. That is all. An agent reads the issue
+and your comments, drafts the spec and the acceptance tests, and Checkpoint 1 waits for you. `/go model=fast` does the
+same on Claude. Any time of day; no labels needed. (A `/go` older than 24 hours on an issue that never started is
+treated as history, not as a request.)
+
+For tonight instead of now: put the label `night/ok` on the issue (see below).
+
 ## Commands
 
-On a work issue (only your login counts; the factory's own login is never obeyed):
+On a work issue (only your login counts; the factory's own login is never obeyed). Every command gets an answer: if
+nothing can happen, the factory says why.
 
 | Command | Where | Effect |
 |---|---|---|
-| `/go` | any checkpoint | continue; runs on the **local model**, records the gate's typical minutes |
+| `/go` | an issue not started yet | start it: spec and acceptance tests are drafted, then Checkpoint 1 |
+| `/go` | CP1, CP2, CP3 | **approve** what is shown and continue. The factory records your approval in the file (`Status: approved`, or the remaining `PROPOSED` rows become `ACCEPTED`) in a commit that names your comment. To change something first, edit the file, then `/go` |
+| `/go` | any other checkpoint | continue; runs on the **local model**, records the gate's typical minutes |
 | `/go model=smart\|fast\|cheap` | any checkpoint | the same step on Claude (Opus, Sonnet, Haiku): spends cloud tokens |
 | `/go minutes=N` | any checkpoint | record your real time on the gate instead of the default |
 | `/rework <what is wrong>` | CP3 plan, CP4 review, CP5 release | send it back with a note |

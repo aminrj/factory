@@ -15,10 +15,11 @@ spec pasted ─▶ CP1 spec ─▶ CP2 threat model ─▶ CP3 plan ─▶ build
 | # | Stage | What happens | Your part | Status |
 |---|---|---|---|---|
 | 0 | **Start** | Open an issue in the factory repo with the label `new-app`, the app name as the title and your spec as the body. The foreman creates the repo from `factory-template` (or fills an empty repo you created), commits your spec as `Status: draft`, and an agent drafts the holdout tests from it. | paste the spec | planned (today: `scripts/new_app.py <app> "<description>" --seed <folder>` from a session) |
-| 1 | **CP1 spec** | Spec and holdout tests on the branch, WIP pull request. | approve the spec (`Status: approved` in your own commit), `/go` | works |
-| 2 | **CP2 threat model** | An agent drafts the threat model. | decide every row, `/go` | works |
-| 2b | **Questions** | Research may raise questions. | answer, `/go` | works |
-| 3 | **CP3 plan** | An agent writes the plan in phases. | approve or `/rework` | works |
+| 0b | **Start a change** | On an app that exists: write an issue, comment `/go`. An agent drafts the spec and the acceptance tests from it. | write the issue, `/go` | works |
+| 1 | **CP1 spec** | Spec and holdout tests on the branch, WIP pull request. | `/go` (your approval; edit the spec first if you disagree) | works |
+| 2 | **CP2 threat model** | An agent drafts the threat model. | `/go` accepts the rows you did not change | works |
+| 2b | **Questions** | Research may raise questions. | answer if you want, `/go` | works |
+| 3 | **CP3 plan** | An agent writes the plan in phases. | `/go` to build, or `/rework <note>` | works |
 | 4 | **Build and test** | One agent run per phase, CI after each on the runner, retries; then a validation report. | nothing | works |
 | 5 | **CP4 review on staging** | The pull request's head runs **as a container on the devbox**; the checkpoint links it (phone and PC). | try it, read the diff, merge, or `/rework` | works |
 | 6 | **Release candidate** | After your merge: the foreman builds the image from `main` on the devbox, scans it (vulnerabilities, SBOM), tags it `v<date>.<n>` and pushes it to the Gitea container registry. It then runs **that exact image** as a container on the devbox, the same image that would go to production. | nothing | built (factory#84) |

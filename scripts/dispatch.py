@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from commands import DEFAULT_MODEL, MODELS  # noqa: E402
-from gitea import Gitea, is_owner_email, label_added_by_owner, ours  # noqa: E402
+from gitea import Gitea, by_owner, is_owner_email, label_added_by_owner, ours  # noqa: E402
 
 STEPS = ["spec", "threat-model", "research", "plan", "implement", "validate"]
 ORCH_NAME, ORCH_EMAIL = "factory-orchestrator", "factory-orchestrator@users.noreply.local"
@@ -175,20 +175,34 @@ def human_identity(main: Path) -> tuple[str, str]:
 
 
 def check_holdout_formatted(wt: Path) -> None:
-    """The holdout files are the human's. If they are not ruff-format clean, an agent's `ruff format .` rewrites them,
-    the holdout guard refuses the commit, and the step fails (seen on brevkoll#1). Make the human fix it first."""
+    """The holdout files are the owner's. If they are not ruff-format clean, an agent's `ruff format .` rewrites them,
+    the holdout guard refuses the commit, and the step fails (brevkoll#1). This used to stop the item until the owner
+    ran the formatter by hand (brevkoll#26, 2026-11-22); formatting changes no test, so the factory does it: one
+    commit as factory-orchestrator (not an agent, so the guards accept it), saying it is mechanical."""
     if not (wt / "tests" / "holdout").is_dir():
         return
     res = subprocess.run(["uv", "run", "ruff", "format", "--check", "tests/holdout"], cwd=wt,
                          capture_output=True, text=True, check=False)
-    if res.returncode == 1:
-        die("tests/holdout is not ruff-format clean. Run `uv run ruff format tests/holdout` and commit it as yourself "
-            "(Gate 1), otherwise the agent's formatter will touch your files and the guard will refuse the step.")
+    if res.returncode != 1:
+        return
+    orch = {**os.environ, "GIT_AUTHOR_NAME": ORCH_NAME, "GIT_AUTHOR_EMAIL": ORCH_EMAIL,
+            "GIT_COMMITTER_NAME": ORCH_NAME, "GIT_COMMITTER_EMAIL": ORCH_EMAIL}
+    run("uv", "run", "ruff", "format", "tests/holdout", cwd=wt)
+    run("git", "add", "tests/holdout", cwd=wt)
+    run("git", "commit", "-q", "-m", "tests/holdout: ruff format (mechanical, no test changed)", cwd=wt, env=orch)
+    print("formatted tests/holdout (mechanical) before the step")
 
 
-def check_entry(step: str, wt: Path, n: int, human_email: str, login: str = "", policy: bool = False) -> None:
+OWNER_TRAILER = re.compile(r"^Approved-by-owner: comment (\d+)$", re.MULTILINE)  # keep in step with orchestrate.py
+
+
+def check_entry(step: str, wt: Path, n: int, human_email: str, login: str = "", policy: bool = False,
+                owner_gos: frozenset[int] = frozenset()) -> None:
     """policy: the issue carries the night/ok label, so an approval committed by factory-orchestrator with the policy
-    trailer counts as the owner's (night.py). Without the label it never does."""
+    trailer counts as the owner's (night.py). Without the label it never does.
+    owner_gos: the ids of the owner's `/go` comments on this issue. An approval committed by factory-orchestrator with
+    `Approved-by-owner: comment N` counts as the owner's only when N is one of them (the foreman records the owner's
+    `/go` as the approval; an agent cannot write such a comment)."""
     t = wt / "thoughts" / str(n)
     if step == "spec":
         if (t / "spec.md").exists():
@@ -214,9 +228,11 @@ def check_entry(step: str, wt: Path, n: int, human_email: str, login: str = "", 
         if not log:
             die("'Status: approved' is not in any commit yet (uncommitted edit).")
         sha, name, email = log.splitlines()[0].split("\t")
-        by_policy = (policy and name == ORCH_NAME and email == ORCH_EMAIL
-                     and POLICY_TRAILER in run("git", "log", "-1", "--format=%B", sha, cwd=wt))
-        if not by_policy and (name == AGENT or not is_owner_email(email, login, human_email)):
+        body = run("git", "log", "-1", "--format=%B", sha, cwd=wt)
+        by_orch = name == ORCH_NAME and email == ORCH_EMAIL
+        by_policy = policy and by_orch and POLICY_TRAILER in body
+        by_go = by_orch and any(int(x) in owner_gos for x in OWNER_TRAILER.findall(body))
+        if not (by_policy or by_go) and (name == AGENT or not is_owner_email(email, login, human_email)):
             die(f"'Status: approved' was set by {name} <{email}>, not by the human.")
 
 
@@ -466,7 +482,9 @@ def main() -> None:
     ensure_worktree(main_clone, branch, wt)
     labels = {lab["name"] for lab in g.get(f"/repos/{repo}/issues/{n}/labels")}
     policy = POLICY_LABEL in labels and label_added_by_owner(g, repo, n, POLICY_LABEL)
-    check_entry(step, wt, n, human_email, g.user, policy=policy)
+    owner_gos = frozenset(c["id"] for c in g.paged(f"/repos/{repo}/issues/{n}/comments")
+                          if by_owner(g, c) and re.match(r"^\s*/go\b", c["body"], re.IGNORECASE))
+    check_entry(step, wt, n, human_email, g.user, policy=policy, owner_gos=owner_gos)
     if args.dry_run:
         print(f"dry run ok: {step} may run on {branch} in {wt}")
         return

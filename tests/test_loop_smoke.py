@@ -138,35 +138,35 @@ class LoopSmokeTests(unittest.TestCase):
         self.assertEqual(orchestrate.active_issues(self.g), [("owner/app", 1)])  # type: ignore[arg-type]
 
     def test_gate_1_end_to_end(self) -> None:
-        # 1. /go with a note on the same line, but the spec is still a draft: refused, and said so
-        self.owner_says("/go minutes=5 looks fine to me, approving now")
-        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "needs human")  # type: ignore[arg-type]
-        self.assertIn("Status: draft", self.last_bot_text())
-        self.assertEqual(self.dispatched, [])
-        # 2. approved in Gitea's web editor (a noreply author), then /go: the agent step runs and the next gate opens
-        self.approve_in_the_web_editor()
-        self.owner_says("/go minutes=3")
+        # /go is the approval: the foreman records it in the spec (a commit naming the comment) and the next step runs
+        self.owner_says("/go minutes=3 looks fine to me")
         self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran after_gate1")  # type: ignore[arg-type]
         self.assertEqual(self.dispatched, ["threat-model"])
         self.assertIn("stage/spec-ready", self.g.labels)
         self.assertIn("CHECKPOINT 2", self.last_bot_text())
-        # 3. the data the retro needs: the owner's minutes and how long each checkpoint waited
+        git(self.clone, "fetch", "-q", "origin")
+        self.assertIn("Status: approved", git(self.clone, "show", "origin/agent/issue-1:thoughts/1/spec.md"))
+        body = git(self.clone, "log", "-1", "--format=%an|%B", "origin/agent/issue-1", "--", "thoughts/1/spec.md")
+        self.assertTrue(body.startswith("factory-orchestrator|"))
+        self.assertIn(f"Approved-by-owner: comment {self.g.comments[-3]['id']}", body)
+        # the data the retro needs: the owner's minutes and how long the checkpoint waited
         minutes = [json.loads(x) for x in (self.data / "human_minutes.jsonl").read_text().splitlines()]
         self.assertEqual([m["minutes"] for m in minutes], [3])
         waits = [json.loads(x) for x in (self.data / "gate_waits.jsonl").read_text().splitlines()]
-        self.assertEqual(len(waits), 2)
         self.assertEqual(waits[0]["checkpoint"], "after_gate1")
-        self.assertGreater(waits[0]["wait_min"], 0)
 
-    def test_an_approval_by_the_factory_is_refused(self) -> None:
+    def test_an_approval_written_by_an_agent_is_not_the_approval(self) -> None:
+        # an agent may write `Status: approved`; only the owner's /go passes the gate, and it is recorded on its own
         self.spec.write_text("# Spec: #1 change\n\nStatus: approved\n")
         git(self.clone, "add", "-A")
         git(self.clone, "commit", "-q", "-m", "agent approves", email=BOT)
         git(self.clone, "push", "-q", "origin", "agent/issue-1")
-        self.owner_says("/go")
-        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "needs human")  # type: ignore[arg-type]
-        self.assertIn("someone other", self.last_bot_text())
+        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "waiting")  # type: ignore[arg-type]
         self.assertEqual(self.dispatched, [])
+        self.owner_says("/go")
+        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran after_gate1")  # type: ignore[arg-type]
+        git(self.clone, "fetch", "-q", "origin")
+        self.assertIn("Approved-by-owner: comment ", git(self.clone, "log", "-1", "--format=%B", "origin/agent/issue-1"))
 
     def test_an_unknown_command_gets_one_reply(self) -> None:
         self.owner_says("/approve")

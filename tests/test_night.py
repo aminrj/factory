@@ -81,12 +81,7 @@ class NightLoopTests(unittest.TestCase):
     """The real handlers with the night shift on: it passes the gates before the code and stops for the owner."""
 
     setUp = tlg.GateTests.setUp
-    def commit_file(self, rel: str, text: str, email: str = tlg.BOT) -> None:
-        # like dispatch's worktree: fast-forward to what the policy pushed before the agent commits
-        if subprocess.run(["git", "ls-remote", "--heads", "origin", "agent/issue-1"], cwd=self.clone,
-                          capture_output=True, text=True).stdout:
-            subprocess.run(["git", "pull", "-q", "--ff-only", "origin", "agent/issue-1"], cwd=self.clone, check=True)
-        tlg.GateTests.commit_file(self, rel, text, email)
+    commit_file = tlg.GateTests.commit_file
     fake_dispatch = tlg.GateTests.fake_dispatch
     fake_ci = tlg.GateTests.fake_ci
     checkpoint = tlg.GateTests.checkpoint

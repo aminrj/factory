@@ -125,9 +125,9 @@ def open_work_item(g: Gitea, app: str, title: str, body: str, seed: Path | None,
     orchestrate.checkpoint(
         ctx, "1", "spec and holdout tests need your review",
         f"Gate 1 is on `{branch}`, drafted {who}. Pull request (CI runs the holdout tests here): {pr['html_url']}\n\n"
-        f"- [spec.md]({ctx.file_link('spec.md')})\n{links}\n\nRead the spec and the tests and change what you disagree with. "
-        "If the spec has a `Status:` line, change `Status: draft` to `Status: approved` in a commit of your own (the pencil icon "
-        "in Gitea works). Then reply `/go`. Approving makes the spec and the tests yours.", "after_gate1")
+        f"- [spec.md]({ctx.file_link('spec.md')})\n{links}\n\nIs this the change you want? Reply `/go` to approve it (I "
+        "record your approval in the spec). Edit the spec or the tests first if something is wrong, or `/stop`.",
+        "after_gate1")
     return n, branch
 
 

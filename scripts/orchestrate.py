@@ -29,7 +29,7 @@ import sys
 import time
 import urllib.request
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -424,9 +424,32 @@ def spec_approval_problem(clone: Path, branch: str, n: int, spec: str, human_ema
     return None
 
 
+OWNER_TRAILER = "Approved-by-owner: comment {id}"  # keep in step with dispatch.py
+
+
+def approve(ctx: Ctx, name: str, edit: Callable[[str], str], what: str) -> None:
+    """Pass a gate. With the night label: the policy's approval. Otherwise the owner's `/go` is the approval (2026-11-22:
+    editing `Status:` lines and `PROPOSED` rows on the phone made every gate a chore, and forgetting it cost 6 `-fix`
+    checkpoints). The foreman commits the edit as factory-orchestrator with a trailer naming the owner's comment; the
+    guards accept it only when that comment is the owner's `/go` on this issue."""
+    if ctx.auto:
+        return approve_by_policy(ctx, name, edit, what)
+    trailer = OWNER_TRAILER.format(id=ctx.go_id)
+    approval_commit(ctx, name, edit, f"#{ctx.n} {what}: approved by the owner's /go\n\n{trailer}", record=True)
+    log(f"{ctx.app}#{ctx.n}: {what} approved by the owner's /go (comment {ctx.go_id})")
+
+
 def approve_by_policy(ctx: Ctx, name: str, edit: Callable[[str], str], what: str) -> None:
     """The night shift passes a gate: one commit by factory-orchestrator with the policy trailer, pushed to the branch.
     The owner sees it in the branch history and on Checkpoint 4; the guards accept it only while the label is on."""
+    approval_commit(ctx, name, edit, f"#{ctx.n} {what}: approved by the night policy\n\nThe issue carries the label "
+                    f"{night.LABEL}; the owner reviews this at Checkpoint 4.\n\n{night.TRAILER}")
+    log(f"{ctx.app}#{ctx.n}: {what} approved by the night policy")
+
+
+def approval_commit(ctx: Ctx, name: str, edit: Callable[[str], str], message: str, record: bool = False) -> None:
+    """One commit by factory-orchestrator that edits thoughts/N/<name>, pushed to the item's branch. record: commit
+    even when the file needs no edit, so every gate the owner passed is in the branch history."""
     # A short-lived detached worktree: the branch may be checked out in the agent's worktree, which fast-forwards to
     # this commit on its next step.
     wt = WORK / "worktrees" / f"{ctx.app}-issue-{ctx.n}-policy"
@@ -438,84 +461,61 @@ def approve_by_policy(ctx: Ctx, name: str, edit: Callable[[str], str], what: str
         path = wt / "thoughts" / str(ctx.n) / name
         text = path.read_text()
         new = edit(text)
-        if new == text:
+        if new == text and not record:
             return
         path.write_text(new)
         sh("git", "add", str(path.relative_to(wt)), cwd=wt)
-        sh("git", "commit", "-q", "-m", f"#{ctx.n} {what}: approved by the night policy\n\nThe issue carries the label "
-           f"{night.LABEL}; the owner reviews this at Checkpoint 4.\n\n{night.TRAILER}", cwd=wt)
+        sh("git", "commit", "-q", "--allow-empty", "-m", message, cwd=wt)
         sh("git", "push", "-q", "origin", f"HEAD:refs/heads/{ctx.branch}", cwd=wt)
     finally:
         sh("git", "worktree", "remove", "--force", str(wt), cwd=ctx.clone, check=False)
-    log(f"{ctx.app}#{ctx.n}: {what} approved by the night policy")
 
 
 def set_status(text: str, value: str = "approved") -> str:
     return re.sub(r"^(\**Status:\**\s*)\w+", lambda m: m.group(1) + value, text, count=1, flags=re.IGNORECASE | re.MULTILINE)
 
 
+PLACEHOLDER = re.compile(r"<(?:[a-z]+[ _-]){1,6}[a-z]+>")  # `<one line summary>`, not `<script>` or `a < b`
+
+
 def after_gate1(ctx: Ctx) -> None:
     spec = ctx.branch_file("spec.md")
-    if "<" in spec:
-        raise NeedsHuman("`spec.md` still contains `<` placeholders. Fix them, push, then reply `/go` again.")
-    if ctx.auto:
-        approve_by_policy(ctx, "spec.md", set_status, "spec")
-    else:
-        problem = spec_approval_problem(ctx.clone, ctx.branch, ctx.n, spec, sh("git", "config", "user.email", cwd=ctx.clone),
-                                        ctx.g.user)
-        if problem:
-            raise NeedsHuman(problem)
+    holes = sorted(set(PLACEHOLDER.findall(spec)))
+    if holes:
+        raise NeedsHuman("`spec.md` still has template placeholders: " + ", ".join(f"`{h}`" for h in holes[:6])
+                         + f". Fill them in ({ctx.file_link('spec.md')}), or `/stop`.")
+    approve(ctx, "spec.md", set_status, "spec")
     ctx.record_minutes("spec")
     dispatch(ctx, "threat-model")
     ctx.g.set_stage(ctx.repo, ctx.n, "spec-ready")
     checkpoint(ctx, "2", "threat model, you decide every row",
                f"I drafted the threat model: {ctx.file_link('threat-model.md')}\n\n"
-               "Change every `PROPOSED` to `ACCEPTED`, `CHANGED: ...` or `REJECTED`, answer the open questions at the "
-               "end of the file, commit as yourself and push (the pencil icon on that page works).",
+               "Reply `/go` to accept it as it is (I mark the remaining `PROPOSED` rows `ACCEPTED`). To decide a row "
+               "differently, edit it first (`CHANGED: ...` or `REJECTED`, the pencil icon on that page works), then `/go`.",
                "after_gate2")
 
 
 def after_gate2(ctx: Ctx) -> None:
     tm = ctx.branch_file("threat-model.md")
     hits = [(i, line) for i, line in enumerate(tm.splitlines(), 1) if re.search(r"\bPROPOSED\b", line)]
-    if hits and ctx.auto:
-        approve_by_policy(ctx, "threat-model.md", lambda t: re.sub(r"\bPROPOSED\b", "ACCEPTED (night policy)", t),
-                          f"threat model ({len(hits)} rows)")
-        hits = []
     if hits:
-        shown = "\n".join(f"- line {i}: {line.strip()[:110]}" for i, line in hits[:10])
-        raise NeedsHuman(f"`threat-model.md` still contains the word `PROPOSED` {len(hits)} time(s). The gate refuses any "
-                         f"occurrence, also in prose, so replace each with your decision (or reword it):\n\n{shown}\n\n"
-                         f"{ctx.file_link('threat-model.md')}")
+        word = "ACCEPTED (night policy)" if ctx.auto else "ACCEPTED"
+        approve(ctx, "threat-model.md", lambda t: re.sub(r"\bPROPOSED\b", word, t), f"threat model ({len(hits)} rows)")
     ctx.record_minutes("threat_model")
     dispatch(ctx, "research")
     qs = open_questions(ctx.branch_file("research.md"))
     if qs:
         checkpoint(ctx, "2b", "research raised questions",
                    f"Research: {ctx.file_link('research.md')}\n\nOpen questions:\n" + "\n".join(f"- {q}" for q in qs[:10]) +
-                   "\n\nAnswer them as a comment on this issue (I copy your comments into the planner's input), "
-                   "then reply `/go`.", "after_research_questions")
+                   "\n\nAnswer them in a comment if you want to (your comments go to the planner), then `/go`. "
+                   "`/go` without answers is fine: the planner defers what is still open.", "after_research_questions")
         return
     plan_and_checkpoint(ctx)
 
 
-def answered_since_checkpoint(ctx: Ctx) -> bool:
-    """Did the owner write anything (other than a command) after the checkpoint that this /go answers?"""
-    comments = ctx.g.paged(f"/repos/{ctx.repo}/issues/{ctx.n}/comments")
-    # the checkpoint that asked the questions ("2b"), not a later "interrupted" or "retry" one
-    cp = max((c["id"] for c in comments if c["body"].startswith(f"{CP_PREFIX} 2b:") and c["id"] < ctx.go_id), default=0)
-    return any(c["id"] > cp and c["id"] != ctx.go_id for c in owner_comments(ctx.g, ctx.repo, ctx.n)
-               if not is_command(c["body"]))
-
-
 def after_research_questions(ctx: Ctx) -> None:
-    st = ctx.state()
-    if not ctx.auto and not answered_since_checkpoint(ctx) and not st.get("nudged_questions"):
-        st["nudged_questions"] = True
-        ctx.save(st)
-        raise NeedsHuman("You have not answered the research questions (no comment from you since they were asked). The planner "
-                         "will keep an unanswered question out of the plan, or park it under `Deferred`. Answer them in a "
-                         "comment on this issue and reply `/go`, or reply `/go` again to continue without answers.")
+    # `/go` without answers continues: the planner keeps an unanswered question out of the plan or under `Deferred`.
+    # (It used to ask "are you sure?" first: one more checkpoint for nothing.)
     ctx.record_minutes("plan_review")
     plan_and_checkpoint(ctx)
 
@@ -528,12 +528,10 @@ def plan_and_checkpoint(ctx: Ctx, note: str | None = None) -> None:
 def plan_checkpoint(ctx: Ctx) -> None:
     n_ph = phases(ctx.branch_file("plan.md"))
     checkpoint(ctx, "3", "approve the plan or send it back",
-               f"Plan with {n_ph} phases: {ctx.file_link('plan.md')}\n\nThree ways to answer:\n"
-               "- **Approve:** change `Status: draft` to `Status: approved` in a commit of your own and push, then reply `/go`. "
-               "I refuse to build until the approval is in a commit by you.\n"
-               "- **Send it back:** reply `/rework <what to change>`. The planner gets your note, your comments on this issue and "
-               "the edits you made to `plan.md`, and writes a new draft.\n"
-               "- **Edit it yourself:** change the file, set `Status: rework` and reply `/go`; same as the line above.",
+               f"Plan with {n_ph} phases: {ctx.file_link('plan.md')}\n\n"
+               "- **Build it:** reply `/go` (I record your approval in the plan).\n"
+               "- **Change it:** reply `/rework <what to change>`. The planner gets your note, your comments and any edits "
+               "you made to `plan.md`, and writes a new draft.",
                "after_gate3", rework=True)
 
 
@@ -576,15 +574,10 @@ def after_gate3(ctx: Ctx) -> None:
         risky = night.risky_mentions(plan)
         if risky:
             raise NeedsHuman("The night shift does not approve a plan that touches risky areas (" + ", ".join(
-                f"`{r}`" for r in risky) + "). Read it; to build it, set `Status: approved` in a commit of your own "
-                "and reply `/go`, or `/rework <what to change>`.")
-        approve_by_policy(ctx, "plan.md", set_status, "plan")
-        status = "approved"
-    if status == "draft":
-        raise NeedsHuman("`plan.md` still says `Status: draft`, so there is nothing to build yet. To build it, change the line "
-                         "to `Status: approved` in a commit of your own and reply `/go`. To change the plan, reply "
-                         "`/rework <what to change>` (your comments and your edits to the file go to the planner), or set "
-                         "`Status: rework` and reply `/go`.")
+                f"`{r}`" for r in risky) + "). Read it; to build it reply `/go` (your approval), or "
+                "`/rework <what to change>`.")
+    if status != "approved":
+        approve(ctx, "plan.md", set_status, "plan")
     ctx.record_minutes("plan_review")
     build(ctx)
 
@@ -1035,9 +1028,56 @@ def consecutive_failures(g: Gitea, repo: str, n: int, handler: str) -> int:
     return sum(1 for c in mine if c["id"] > last_ok and f"retry-of={handler}" in c["body"])
 
 
+START_WINDOW_H = 24  # an older `/go` on an unstarted issue is history, not a request (no surprise starts on deploy)
+
+
+def start_request(g: Gitea, repo: str, n: int) -> dict | None:
+    """The owner's `/go` on an issue the factory has not started (no checkpoint, no claim of ours): it starts the item.
+    2026-11-22: a bug filed as an issue, then `/go model=fast`, got no answer at all, because only labeled issues were
+    watched. Now `/go` is the one way to start work, any time of day."""
+    comments = g.paged(f"/repos/{repo}/issues/{n}/comments")
+    mine = [c for c in comments if ours(g, c)]
+    if any(c["body"].startswith((CP_PREFIX, CLAIM_PREFIX)) for c in mine):
+        return None
+    answered = answered_ids(mine)
+    cutoff = datetime.now(UTC) - timedelta(hours=START_WINDOW_H)
+    gos = [c for c in comments if by_owner(g, c) and GO.match(c["body"]) and c["id"] not in answered
+           and parse_ts(c["created_at"]) >= cutoff]
+    return gos[-1] if gos else None
+
+
+def start(g: Gitea, repo: str, n: int, cmd: dict) -> str:
+    """Start an issue on the owner's `/go`: in its lane's own process, like any step."""
+    app = repo.split("/")[1]
+    opts = command_options(cmd["body"])
+    if opts.errors:
+        refuse(Ctx(g, repo, n, None, cmd["id"], {}), cmd["id"], "; ".join(opts.errors),
+               f"send the command again without that option. Accepted: {commands.USAGE}.")
+        return "refused"
+    model = opts.model or commands.DEFAULT_MODEL
+    if lanes.enabled():
+        if lanes.item_running(STATE, app, n):
+            return "busy"
+        lane = lanes.lane_of(model)
+        if lane == "local" and (pending := model_switch_pending(g)):
+            return f"queued: the local model is being switched to `{pending}` (/llm on the status issue)"
+        if not lanes.has_room(STATE, lane):
+            return f"queued: the {lane} lane is full ({lanes.describe(lanes.busy(STATE, lane))})"
+        rec = lanes.spawn(STATE, app, n, lane, ["adopt", app, str(n), "--go", str(cmd["id"])], "spec (start)",
+                          HQ / "scripts" / "orchestrate.py")
+        log(f"{app}#{n}: started by /go (comment {cmd['id']}) in the {lane} lane ({rec['unit']})")
+        return f"started in the {lane} lane"
+    issue = g.get(f"/repos/{repo}/issues/{n}")
+    adopt(g, repo, n, issue.get("title", ""), go=cmd)
+    return "started"
+
+
 def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
     if decide(g, repo, n) is None:
-        return "waiting"
+        cmd = start_request(g, repo, n)
+        if cmd is None:
+            return "waiting"
+        return "would start" if dry else start(g, repo, n, cmd)
     if dry:
         return "would act"
     if lanes.enabled():
@@ -1336,7 +1376,20 @@ def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
     comments = g.paged(f"/repos/{repo}/issues/{n}/comments")
     pivot = next((c for c in reversed(comments) if ours(g, c)
                   and c["body"].startswith((CP_PREFIX, CLAIM_PREFIX))), None)
-    if pivot is None:
+    if pivot is None:  # not started: `/go` starts it (start_request); anything else gets one reply, never silence
+        cutoff = datetime.now(UTC) - timedelta(hours=START_WINDOW_H)
+        for c in owner_comments(g, repo, n):
+            key = f"{repo}#{c['id']}"
+            if (key in seen or not c["body"].lstrip().startswith("/") or GO.match(c["body"])
+                    or parse_ts(c["created_at"]) < cutoff):
+                continue
+            word = c["body"].lstrip().split()[0][:30]
+            g.comment(repo, n, f"{NOTICE_PREFIX} `{word}` (comment {c['id']}) did nothing: this issue has not started "
+                               "yet. Reply `/go` to start it (an agent drafts the spec, then Checkpoint 1 waits for you); "
+                               "add `model=fast` to use the cloud.")
+            seen.add(key)
+        STATE.mkdir(exist_ok=True)
+        REPLIED.write_text(json.dumps(sorted(seen)[-300:]))
         return
     for c in owner_comments(g, repo, n):
         key = f"{repo}#{c['id']}"
@@ -1480,9 +1533,9 @@ def active_issues(g: Gitea) -> list[tuple[str, int]]:
     for r in sorted(x["full_name"] for x in g.paged("/repos/search?q=factory-app&topic=true")):
         for i in g.paged(f"/repos/{r}/issues?state=open&type=issues"):
             names = {label["name"] for label in i.get("labels", [])}
-            # idea: a change opened by new_change.py waits at Checkpoint 1 with this label (decide() ignores issues
-            # that have no checkpoint, so watching them is cheap)
-            if names & {"stage/idea", "stage/spec-ready", "stage/building"}:
+            # A started item carries a stage label. Any other open issue with a comment may hold the owner's `/go` that
+            # starts it (start_request), or a command to answer: never ignore a command silently (brevkoll#29).
+            if names & {"stage/idea", "stage/spec-ready", "stage/building"} or i.get("comments", 0) > 0:
                 out.append((r, i["number"]))
     return out
 
@@ -1498,6 +1551,7 @@ def main() -> None:
     ad = sub.add_parser("adopt")
     ad.add_argument("repo")
     ad.add_argument("issue", type=int)
+    ad.add_argument("--go", type=int, help="the owner's /go comment that starts the issue (else: the night shift)")
     sub.add_parser("status")
     a = ap.parse_args()
     try:
@@ -1509,7 +1563,13 @@ def main() -> None:
                     print(process(g, f"{g.user}/{a.repo}", a.issue))
                 else:
                     repo = f"{g.user}/{a.repo}"
-                    adopt(g, repo, a.issue, g.get(f"/repos/{repo}/issues/{a.issue}")["title"])
+                    title = g.get(f"/repos/{repo}/issues/{a.issue}")["title"]
+                    if a.go:  # started by the owner's /go: only while it is still the open request (no double start)
+                        cmd = start_request(g, repo, a.issue)
+                        if cmd and cmd["id"] == a.go:
+                            adopt(g, repo, a.issue, title, go=cmd)
+                    else:
+                        adopt(g, repo, a.issue, title)
             finally:
                 lanes.finished(STATE, a.repo, a.issue)
             return
@@ -1594,21 +1654,35 @@ def night_tick(g: Gitea) -> None:
             return
 
 
-def adopt(g: Gitea, repo: str, n: int, title: str) -> None:
-    """Start a labeled issue: an agent drafts the spec and the holdout tests, then Checkpoint 1 (passed on the next tick)."""
-    ctx = Ctx(g, repo, n, None, 0, {}, model="local")
-    ctx.auto = True
+def adopt(g: Gitea, repo: str, n: int, title: str, go: dict | None = None) -> None:
+    """Start an issue: an agent drafts the spec and the holdout tests, then Checkpoint 1. Started by the owner's `/go`
+    (go: that comment; the model it names, Checkpoint 1 waits for the owner) or by the night shift (label, local model,
+    Checkpoint 1 passed on the next tick)."""
+    if go is not None:
+        model = command_options(go["body"]).model or commands.DEFAULT_MODEL
+        ctx = Ctx(g, repo, n, None, go["id"], {}, model=model)
+        ctx.auto = False
+        earlier = "".join(f" (comment {c['id']})" for c in g.paged(f"/repos/{repo}/issues/{n}/comments")
+                          if by_owner(g, c) and GO.match(c["body"]) and c["id"] < go["id"])
+        also = f", covering the earlier{earlier}" if earlier else ""
+        ctx.comment(f"{CLAIM_PREFIX} Picked up `/go` (comment {go['id']}){also}: starting this issue. An agent reads it (and "
+                    f"your comments) and drafts the spec and the acceptance tests on model `{model}`; then Checkpoint 1 "
+                    "waits for you. `/stop` stops it.")
+    else:
+        ctx = Ctx(g, repo, n, None, 0, {}, model="local")
+        ctx.auto = True
+        ctx.comment(f"{CLAIM_PREFIX} 🌙 Night shift (label `{night.LABEL}`): picking up this issue. An agent drafts the "
+                    "spec and the holdout tests from it on model `local`; then Checkpoint 1, which I pass on the next "
+                    "tick. You review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
     app = repo.split("/")[1]
-    ctx.comment(f"{CLAIM_PREFIX} 🌙 Night shift (label `{night.LABEL}`): picking up this issue. An agent drafts the spec "
-                "and the holdout tests from it on model `local`; then Checkpoint 1, which I pass on the next tick. You "
-                "review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
     g.set_stage(repo, n, "idea")
     try:
         pick_up(ctx)
     except StepFailed as e:
         # A retryable checkpoint like any failed step: `/go` (or the night shift) drafts the spec again, within the
         # retry budget. brevkoll#7 (2026-11-22) timed out once and got a checkpoint only a session could answer.
-        night.record(STATE, datetime.now(UTC), f"{app}#{n}", "spec", "failed")
+        if ctx.auto:
+            night.record(STATE, datetime.now(UTC), f"{app}#{n}", "spec", "failed")
         cls = FAILURE_CLASS.search(str(e))
         label, title_ = (("spec-blocked", f"blocked: {cls.group(1)}") if cls
                          else ("spec-retry", "the spec draft failed"))
@@ -1622,11 +1696,13 @@ def pick_up(ctx: Ctx) -> None:
     issue = ctx.g.get(f"/repos/{ctx.repo}/issues/{ctx.n}")
     title = issue.get("title", "") if isinstance(issue, dict) else ""
     dispatch(ctx, "spec")
-    night.record(STATE, datetime.now(UTC), f"{ctx.app}#{ctx.n}", "spec", "drafted")
-    checkpoint(ctx, "1", "spec and holdout tests (drafted by the factory)",
-               f"An agent drafted the spec and the holdout tests for \"{title}\" on `{ctx.branch}`:\n\n"
-               f"- [spec.md]({ctx.file_link('spec.md')})\n\nWith the label `{night.LABEL}` the night shift passes this "
-               "checkpoint; otherwise review it and reply `/go` as usual.", "after_gate1")
+    if ctx.auto:
+        night.record(STATE, datetime.now(UTC), f"{ctx.app}#{ctx.n}", "spec", "drafted")
+    checkpoint(ctx, "1", "the spec and its acceptance tests",
+               f"An agent drafted the spec and the acceptance tests for \"{title}\" on `{ctx.branch}`:\n\n"
+               f"- [spec.md]({ctx.file_link('spec.md')})\n- [tests/holdout/]({ctx.url(f'/src/branch/{ctx.branch}/tests/holdout')})"
+               "\n\nIs this the change you want? Reply `/go` to approve it (I record your approval), edit the files "
+               "first if something is wrong, or `/stop`.", "after_gate1")
 
 
 HANDLERS["pick_up"] = pick_up
