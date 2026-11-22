@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-22 08:40 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 09:38 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | spec-failed: the night shift could not draft the spec | 2026-11-22T07:54+00:00 | 0.8 |
+| (nothing) | | | |
 
 ## idea
 
