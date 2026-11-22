@@ -26,7 +26,7 @@ import threading
 import time
 from typing import Any
 
-REPO = os.environ.get("FACTORY_LEASE_REPO", "factory-ops")
+REPO = "factory-ops"  # FACTORY_LEASE_REPO overrides it; with the factory's own Gitea user: factory-bot/foreman-state
 NAME = "FOREMAN_LEASE"
 SEEN = "FOREMAN_PRIMARY_SEEN"
 LEASE_S = 180
@@ -49,7 +49,8 @@ def host() -> str:
 class Lease:
     def __init__(self, g: Any, me: str | None = None, my_role: str | None = None, clock: Any = time.time) -> None:
         self.g, self.me, self.role, self.clock = g, me or host(), my_role or role(), clock
-        self.path = f"/repos/{g.user}/{REPO}/actions/variables"
+        repo = os.environ.get("FACTORY_LEASE_REPO", REPO)  # "owner/name", or a name in the owner's account
+        self.path = f"/repos/{repo if '/' in repo else g.user + '/' + repo}/actions/variables"
         self._stop = threading.Event()
 
     # -- storage

@@ -140,3 +140,14 @@ class RunLogPushTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaseRepoTests(unittest.TestCase):
+    def test_the_lease_can_live_in_a_repo_the_bot_owns(self) -> None:
+        # Gitea lets only a repo's owner use its Actions variables, so with the factory's own user the lease moves
+        with mock.patch.dict("os.environ", {"FACTORY_LEASE_REPO": "factory-bot/foreman-state"}):
+            self.assertEqual(lease.Lease(FakeVars()).path, "/repos/factory-bot/foreman-state/actions/variables")
+        with mock.patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop("FACTORY_LEASE_REPO", None)
+            self.assertEqual(lease.Lease(FakeVars()).path, "/repos/owner/factory-ops/actions/variables")

@@ -25,7 +25,12 @@ Usage:
   identity.py plan    [--hosts local,ubuntu@devbox]     show what apply would change, change nothing
   identity.py apply   [--hosts ...] [--rotate]
   identity.py protect [--dry-run]
-Run it with the owner's admin token (the default token file). Nothing secret is printed.
+Run it with the owner's token (the default token file). Creating the user and minting its token needs either an
+admin token with the `write:admin` scope, or Gitea's own CLI: set FACTORY_GITEA_CLI to a command that runs `gitea`
+as the server's user, for example
+  FACTORY_GITEA_CLI='kubectl -n gitea-prod exec deploy/gitea -c gitea -- su git -s /bin/sh -c'
+(the gitea command line is passed as one argument). The CLI path needs no admin-scoped token at all. Nothing secret is
+printed.
 """
 
 from __future__ import annotations
@@ -33,7 +38,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import secrets
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -47,7 +54,8 @@ from gitea import Gitea, GiteaError  # noqa: E402
 
 BOT = "factory-bot"
 BOT_EMAIL = "factory-bot@users.noreply.local"
-SCOPES = ["write:repository", "write:issue", "read:user"]
+SCOPES = ["write:repository", "write:issue", "write:user"]  # write:user: to own its state repo
+STATE_REPO = "foreman-state"  # owned by the bot: Gitea lets only a repo's owner use its Actions variables (the lease)
 TOKEN_PREFIX = "factory-"
 FACTORY_REPOS = ("factory", "factory-ops", "factory-template")
 BOT_PUSHES_MAIN = {"factory": "metrics refresh commits", "factory-ops": "run log commits"}
@@ -61,6 +69,21 @@ def repos(g: Gitea) -> list[str]:
 
 # ---------------------------------------------------------------- the user, its rights, its token
 
+def cli() -> list[str] | None:
+    raw = os.environ.get("FACTORY_GITEA_CLI", "").strip()
+    return shlex.split(raw) if raw else None
+
+
+def gitea_cli(args: str) -> str:
+    """Run `gitea <args>` through FACTORY_GITEA_CLI. Raises with the error text (never the output, it may hold a token)."""
+    base = cli()
+    assert base is not None
+    proc = subprocess.run([*base, f"gitea {args}"], capture_output=True, text=True, check=False, timeout=120)
+    if proc.returncode != 0:
+        raise SystemExit(f"gitea CLI failed: {proc.stderr.strip()[-300:]}")
+    return proc.stdout
+
+
 def user_exists(g: Gitea) -> bool:
     return g.exists(f"/users/{BOT}")
 
@@ -68,7 +91,10 @@ def user_exists(g: Gitea) -> bool:
 def ensure_user(g: Gitea, dry: bool) -> list[str]:
     if user_exists(g):
         return []
-    if not dry:
+    if not dry and cli():
+        gitea_cli(f"admin user create --username {BOT} --email {BOT_EMAIL} --random-password "
+                  "--must-change-password=false")
+    elif not dry:
         g.call("POST", "/admin/users", {"username": BOT, "email": BOT_EMAIL, "password": secrets.token_urlsafe(32),
                                         "must_change_password": False, "visibility": "private",
                                         "full_name": "Software factory (foreman)"})
@@ -93,19 +119,25 @@ def basic(user: str, password: str) -> str:
     return "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
 
 
-def new_token(g: Gitea) -> str:
+def new_token(g: Gitea) -> tuple[str, str]:
     """A fresh token for the bot. Admins cannot mint tokens for others, so: a one-time random password, the token made
     with it (basic auth), then another random password nobody keeps."""
+    name = f"{TOKEN_PREFIX}{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+    if cli():
+        out = gitea_cli(f"admin user generate-access-token --username {BOT} --token-name {name} "
+                        f"--scopes {','.join(SCOPES)} --raw").strip().splitlines()
+        if not out or len(out[-1]) < 20:
+            raise SystemExit("the gitea CLI did not print a token")
+        return out[-1].strip(), name
     once = secrets.token_urlsafe(32)
     g.call("PATCH", f"/admin/users/{BOT}", {"login_name": BOT, "source_id": 0, "password": once,
                                             "must_change_password": False})
-    name = f"{TOKEN_PREFIX}{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
     req = urllib.request.Request(f"{g.base}/api/v1/users/{BOT}/tokens", method="POST",
                                  data=json.dumps({"name": name, "scopes": SCOPES}).encode(),
                                  headers={"Authorization": basic(BOT, once), "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 - the Gitea URL from the config
-            token = json.loads(r.read())["sha1"]
+            token = json.loads(r.read())["sha1"], name
     except urllib.error.HTTPError as e:
         raise GiteaError(f"token for {BOT}: HTTP {e.code} {e.read()[:200]!r}") from e
     finally:
@@ -114,9 +146,21 @@ def new_token(g: Gitea) -> str:
     return token
 
 
-def delete_old_tokens(g: Gitea, token: str) -> int:
-    """Delete the bot's other factory tokens (needs the bot's own token)."""
-    hdr = {"Authorization": f"token {token}"}
+def set_password(g: Gitea, password: str) -> None:
+    if cli():
+        gitea_cli(f"admin user change-password --username {BOT} --password {shlex.quote(password)} "
+                  "--must-change-password=false")
+    else:
+        g.call("PATCH", f"/admin/users/{BOT}", {"login_name": BOT, "source_id": 0, "password": password,
+                                                "must_change_password": False})
+
+
+def delete_old_tokens(g: Gitea, keep: str) -> int:
+    """Delete every factory token of the bot except the newest (`keep` is its name). Gitea lists and deletes tokens
+    only with the user's password: a one-time random one, replaced by another nobody keeps."""
+    once = secrets.token_urlsafe(32)
+    set_password(g, once)
+    hdr = {"Authorization": basic(BOT, once)}
 
     def call(method: str, path: str) -> object:
         req = urllib.request.Request(f"{g.base}/api/v1{path}", method=method, headers=hdr)
@@ -124,19 +168,32 @@ def delete_old_tokens(g: Gitea, token: str) -> int:
             raw = r.read()
             return json.loads(raw) if raw.strip() else None
 
-    try:
-        tokens = call("GET", f"/users/{BOT}/tokens")
-    except urllib.error.HTTPError:
-        return 0  # listing needs basic auth on some versions: the old tokens stay; harmless, they are listed in Gitea
-    mine = sorted((t for t in tokens if t["name"].startswith(TOKEN_PREFIX)), key=lambda t: t["id"])  # type: ignore[union-attr]
     gone = 0
-    for t in mine[:-1]:
-        try:
-            call("DELETE", f"/users/{BOT}/tokens/{t['id']}")
-            gone += 1
-        except urllib.error.HTTPError:
-            pass
+    try:
+        for t in call("GET", f"/users/{BOT}/tokens") or []:  # type: ignore[union-attr]
+            if t["name"].startswith(TOKEN_PREFIX) and t["name"] != keep:
+                call("DELETE", f"/users/{BOT}/tokens/{t['id']}")
+                gone += 1
+    finally:
+        set_password(g, secrets.token_urlsafe(32))
     return gone
+
+
+def ensure_state_repo(g: Gitea, token: str) -> str:
+    """The bot's own private repo for the lease. Returns its full name."""
+    full = f"{BOT}/{STATE_REPO}"
+    hdr = {"Authorization": f"token {token}", "Content-Type": "application/json"}
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"{g.base}/api/v1/repos/{full}", headers=hdr), timeout=20)  # noqa: S310
+        return full
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    body = json.dumps({"name": STATE_REPO, "private": True, "auto_init": True,
+                       "description": "The foreman's lease (Actions variables), written by scripts/lease.py"}).encode()
+    urllib.request.urlopen(urllib.request.Request(f"{g.base}/api/v1/user/repos", data=body, method="POST", headers=hdr),  # noqa: S310
+                           timeout=20)
+    return full
 
 
 # ---------------------------------------------------------------- the hosts
@@ -158,6 +215,7 @@ GIT_CONFIG_KEY_0=credential.$GITEA_URL.helper
 GIT_CONFIG_VALUE_0=
 GIT_CONFIG_KEY_1=credential.$GITEA_URL.helper
 GIT_CONFIG_VALUE_1="store --file=$D/bot-git-credentials"
+FACTORY_LEASE_REPO=$BOT/$STATE_REPO
 EOF
 chmod 600 "$D/bot-token" "$D/bot-git-credentials" "$D/identity.env"
 echo "written: $D/identity.env"
@@ -188,7 +246,7 @@ def host_has_token(host: str) -> bool:
 def write_host(host: str, g: Gitea, token: str) -> str:
     gitea_host = g.base.split("://", 1)[1].rstrip("/")
     return run_on(host, HOST_SCRIPT, stdin=token + "\n",
-                  env={"BOT": BOT, "OWNER": g.user, "GITEA_URL": g.base.rstrip("/"), "HOSTNAME_GITEA": gitea_host})
+                  env={"BOT": BOT, "STATE_REPO": STATE_REPO, "OWNER": g.user, "GITEA_URL": g.base.rstrip("/"), "HOSTNAME_GITEA": gitea_host})
 
 
 def token_works(g: Gitea, token: str) -> str | None:
@@ -243,8 +301,8 @@ def main() -> int:
     g = Gitea()
     if g.bot != g.user:
         raise SystemExit(f"run this with the owner's token (this token is {g.bot}).")
-    if not g.get("/user").get("is_admin"):
-        raise SystemExit("the owner's token must be an admin token (creating a user needs it).")
+    if not cli() and not g.get("/user").get("is_admin"):
+        raise SystemExit("the owner's token must be an admin token, or set FACTORY_GITEA_CLI (see --help).")
     names = repos(g)
     if a.action == "protect":
         for line in protect(g, names, a.dry_run) or ["main is already protected everywhere"]:
@@ -260,13 +318,14 @@ def main() -> int:
         print(("would: " if dry else "done: ") + line)
     if dry or not need:
         return 0
-    token = new_token(g)
+    token, name = new_token(g)
     if token_works(g, token) != BOT:
         raise SystemExit("the new token does not work; nothing was written to the hosts")
+    print(f"lease repo: {ensure_state_repo(g, token)}")
     for h in need:
         print(f"{h}: {write_host(h, g, token)}")
     if a.rotate:
-        print(f"deleted {delete_old_tokens(g, token)} older {BOT} token(s)")
+        print(f"deleted {delete_old_tokens(g, name)} older {BOT} token(s)")
     print("Next: the foreman's next tick posts as the bot. Then `identity.py protect`.")
     return 0
 
