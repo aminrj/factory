@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-22 12:24 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 12:33 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#26 | 2b: research raised questions | 2026-11-22T10:15+00:00 | 2.2 |
+| brevkoll#7 | 1: spec and holdout tests (drafted by the factory) | 2026-11-22T12:24+00:00 | 0.1 |
 
 ## idea
 
