@@ -6,7 +6,7 @@ Usage: new_change.py <app> <title> --seed <dir> [--body <file>]
 The seed folder holds the Gate 1 draft: thoughts/1/spec.md (with `Status: draft`), tests/holdout/ and
 .gitea/workflows/gates.yml. The draft is committed on agent/issue-<n> as factory-orchestrator, never as the owner.
 Gate 1 is the owner's: they review the spec and the holdout tests, set `Status: approved` in a commit of their own and
-reply `/go minutes=N`. This is `new_app.open_work_item` with the two options an existing app needs.
+reply `/go`. This is `new_app.open_work_item` with the two options an existing app needs.
 """
 
 from __future__ import annotations

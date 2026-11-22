@@ -47,3 +47,54 @@ On the GPU workstation, after this change is merged and the runtime clone has it
 It runs the bootstrap on the devbox (which stops before changing anything if a step above is missing), stops the timers
 on the GPU workstation and waits for a running tick, copies `state/`, enables the timers on the devbox and waits up to three
 minutes for a tick to finish there. If none does, it rolls back by itself. Rollback by hand: `cutover.sh <target> --back`.
+
+## The local model: which one, and waking its host
+
+`/go` runs on the local model unless you type `model=smart|fast|cheap`. "Local" is whichever model already serves; the
+factory never loads or switches one. In `~/.config/factory/local-model.env` on the devbox:
+
+```
+LOCAL_MODEL_SERVERS=code=https://<model host>:8743/code,38=https://<model host>:8743/38,agent=https://<model host>:8743
+LOCAL_MODEL_ARBITER_URL=https://<model host>:8743/arbiter
+LOCAL_MODEL_WAKE_CMD=~/git/software-factory/factory/ops/devbox/wake-model-host.sh
+```
+
+Order matters only if two answer (one GPU fits one model, so normally one does): `llm code` first (fast, the night
+default), then `llm 38`, then the agent server the arbiter starts when the GPU is free. When nothing answers a step
+waits up to 10 minutes (`FACTORY_MODEL_WAIT_S`): it asks the arbiter for its model, or, when the host does not answer at
+all, runs the wake command once. While the GPU is yours (`llm desk`, a hold) it does not ask and the step stops as
+`blocked:model_unavailable` without spending a retry.
+
+### Wake
+
+Needs the router rule that lets the devbox reach the router's API (homelab-foundation `lab-devbox-to-wake`) and the
+wake-only key in `~/.config/factory/wake.env` (mode 600): `WAKE_API_URL`, `WAKE_KEY`, `WAKE_SECRET`, `WAKE_IF`, `WAKE_MAC`.
+Test: `ops/devbox/wake-model-host.sh` prints `magic packet sent`.
+
+## Standby foreman on the GPU workstation
+
+The devbox is the primary. The GPU workstation runs the same tick and status timers as a **standby**: it acts only
+when the devbox has stopped renewing the foreman lease for about 5 minutes (`scripts/lease.py`, a Gitea Actions variable
+`FOREMAN_LEASE` in factory-ops), pushes "the standby took over", and hands back between two ticks once the devbox is seen
+again. Exactly one host acts at a time. The workstation is on whenever the local model is, so when it is off the
+factory cannot run local steps anyway.
+
+On the workstation, once:
+
+```
+printf 'FACTORY_ROLE=standby\nFACTORY_HOST=workstation\n' > ~/.config/factory/host.env
+bash ~/git/software-factory/factory/ops/install-timers.sh     # links and enables factory-tick and factory-status
+```
+
+and `~/.config/factory/local-model.env` with the loopback servers (same machine as the model):
+
+```
+LOCAL_MODEL_SERVERS=code=http://127.0.0.1:8081,38=http://127.0.0.1:8082,agent=http://127.0.0.1:8090
+LOCAL_MODEL_ARBITER_URL=http://127.0.0.1:8091
+```
+
+On the devbox: `printf 'FACTORY_ROLE=primary\nFACTORY_HOST=devbox\n' > ~/.config/factory/host.env`.
+
+Limits: per-item state files (`state/<app>-<n>.json`: a rework note not yet used, staging details) stay on the host
+that wrote them. A takeover in the middle of a step resumes from the last checkpoint on the issue, like after a crash.
+Staged builds run on the host that staged them. `FACTORY_LEASE=off` turns the lease off (one host, as before).

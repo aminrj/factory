@@ -12,3 +12,8 @@
 {"ts": "2026-11-21T15:10:53+01:00", "repo": "brevkoll", "issue": 19, "gate": "spec", "minutes": 8, "comment_id": 618}
 {"ts": "2026-11-21T16:08:03+01:00", "repo": "brevkoll", "issue": 19, "gate": "threat_model", "minutes": 99, "comment_id": 630}
 {"ts": "2026-11-21T16:17:08+01:00", "repo": "brevkoll", "issue": 19, "gate": "plan_review", "minutes": 10, "comment_id": 642}
+{"ts": "2026-11-21T15:50:46+00:00", "repo": "brevkoll", "issue": 19, "gate": "plan_review", "minutes": 22, "comment_id": 669}
+{"ts": "2026-11-22T05:50:11+00:00", "repo": "brevkoll", "issue": 19, "gate": "code_review", "minutes": 15, "source": "default", "comment_id": 760}
+{"ts": "2026-11-22T05:51:19+00:00", "repo": "brevkoll", "issue": 19, "gate": "code_review", "minutes": 15, "source": "default", "comment_id": 764}
+{"ts": "2026-11-22T05:52:23+00:00", "repo": "brevkoll", "issue": 19, "gate": "code_review", "minutes": 15, "source": "default", "comment_id": 767}
+{"ts": "2026-11-22T06:17:19+00:00", "repo": "brevkoll", "issue": 19, "gate": "code_review", "minutes": 15, "source": "default", "comment_id": 788}

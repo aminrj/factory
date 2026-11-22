@@ -1,0 +1,16 @@
+[Unit]
+Description=Factory board: serves the read-only page the status job writes every minute (scripts/board.py)
+After=network-online.target
+
+[Service]
+# STAGING_BIND_IP (from staging.env) is the address staged builds already listen on: the LAN or tailnet address of this
+# host, never 0.0.0.0. Port 8801 by default (FACTORY_BOARD_PORT).
+EnvironmentFile=%h/.config/factory/staging.env
+EnvironmentFile=-%h/.config/factory/host.env
+ExecStartPre=/bin/mkdir -p %h/git/software-factory/state/board
+ExecStart=/bin/sh -c 'exec /usr/bin/python3 -I -m http.server "${FACTORY_BOARD_PORT:-8801}" --bind "$STAGING_BIND_IP" --directory %h/git/software-factory/state/board'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

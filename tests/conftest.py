@@ -14,3 +14,10 @@ def no_real_push(monkeypatch: pytest.MonkeyPatch) -> None:
     import urllib.request
     real = urllib.request.urlopen
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
+
+
+@pytest.fixture(autouse=True)
+def single_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The foreman lease (scripts/lease.py) is off unless a test turns it on: fakes of Gitea do not store variables."""
+    monkeypatch.setenv("FACTORY_LEASE", "off")
+    monkeypatch.setenv("FACTORY_NIGHT", "off")  # the night shift would act on its own at night; tests turn it on

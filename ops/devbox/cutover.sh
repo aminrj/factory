@@ -7,7 +7,7 @@
 set -euo pipefail
 target="${1:?usage: cutover.sh <ssh target> [--back]}"
 work="$HOME/git/software-factory"
-timers=(factory-tick nightly-health lookback rework-digest)
+timers=(factory-tick factory-status nightly-health lookback rework-digest)
 base="$(git -C "$work/factory" remote get-url origin)"; base="${base%/factory.git}"
 
 stop_here() {
@@ -15,7 +15,7 @@ stop_here() {
   while systemctl --user is-active -q factory-tick.service; do echo "waiting for the running tick to finish"; sleep 20; done
 }
 stop_there() {
-  ssh "$target" 'for t in factory-tick nightly-health lookback rework-digest; do systemctl --user disable --now $t.timer 2>/dev/null || true; done
+  ssh "$target" 'for t in factory-tick factory-status nightly-health lookback rework-digest; do systemctl --user disable --now $t.timer 2>/dev/null || true; done
                  while systemctl --user is-active -q factory-tick.service; do sleep 20; done'
 }
 copy_state() {  # copy_state <from> <to>; the locks are per host and never copied

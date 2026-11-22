@@ -173,6 +173,82 @@ class PlanRevisionTests(unittest.TestCase):
         self.assertIn("?", dispatch.plan_status_problem("# Plan with no status\n") or "")
 
 
+
+class NightPolicyEntryTests(unittest.TestCase):
+    """A plan approved by the night policy counts only with the label on the issue, and only from factory-orchestrator."""
+
+    setUp = EntryGateTests.setUp
+    commit = EntryGateTests.commit
+    ready = EntryGateTests.ready
+    entry = EntryGateTests.entry
+    refused = EntryGateTests.refused
+
+    def policy_commit(self, name: str = dispatch.ORCH_NAME, email: str = dispatch.ORCH_EMAIL,
+                      trailer: str = dispatch.POLICY_TRAILER) -> None:
+        (self.wt / "thoughts" / "1" / "plan.md").write_text("Status: approved\n")
+        subprocess.run(["git", "add", "-A"], cwd=self.wt, check=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name,
+               "GIT_COMMITTER_EMAIL": email}
+        subprocess.run(["git", "commit", "-q", "-m", f"#1 plan: approved by the night policy\n\n{trailer}"],
+                       cwd=self.wt, check=True, env=env)
+
+    def test_with_the_label_the_policy_approval_counts(self) -> None:
+        self.ready()
+        self.policy_commit()
+        dispatch.check_entry("implement", self.wt, 1, OWNER, "owner", policy=True)
+
+    def test_without_the_label_it_does_not(self) -> None:
+        self.ready()
+        self.policy_commit()
+        self.assertIn("not by the human", self.refused("implement"))
+
+    def test_the_agent_cannot_approve_with_the_trailer(self) -> None:
+        self.ready()
+        self.policy_commit(name=dispatch.AGENT, email=dispatch.AGENT_EMAIL)
+        with self.assertRaises(SystemExit):
+            dispatch.check_entry("implement", self.wt, 1, OWNER, "owner", policy=True)
+
+    def test_the_spec_step_only_starts_without_a_spec(self) -> None:
+        dispatch.check_entry("spec", self.wt, 1, OWNER, "owner")
+        self.commit("spec.md", "# Spec\n", "bot@x")
+        with self.assertRaises(SystemExit):
+            dispatch.check_entry("spec", self.wt, 1, OWNER, "owner")
+
+
+class SpecDraftTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.wt = Path(self.tmp.name)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(self.wt)], check=True)
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=self.wt, check=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": "x@x", "GIT_COMMITTER_NAME": "x",
+                            "GIT_COMMITTER_EMAIL": "x@x"})
+        self.base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.wt, capture_output=True, text=True).stdout.strip()
+
+    def write(self, rel: str, text: str) -> None:
+        path = self.wt / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        subprocess.run(["git", "add", "-A"], cwd=self.wt, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", rel], cwd=self.wt, check=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "x", "GIT_AUTHOR_EMAIL": "x@x", "GIT_COMMITTER_NAME": "x",
+                            "GIT_COMMITTER_EMAIL": "x@x"})
+
+    def test_a_good_draft(self) -> None:
+        self.write("thoughts/3/spec.md", "# Spec\n\nStatus: draft\n")
+        self.write("tests/holdout/test_issue_3.py", "def test_ac1():\n    assert False\n")
+        self.assertIsNone(dispatch.spec_draft_problem(self.wt, 3, self.base))
+
+    def test_an_approved_or_placeholder_spec_or_code_changes_are_refused(self) -> None:
+        self.write("thoughts/3/spec.md", "# Spec\n\nStatus: approved\n")
+        self.assertIn("draft", dispatch.spec_draft_problem(self.wt, 3, self.base) or "")
+        self.write("thoughts/3/spec.md", "# Spec\n\nStatus: draft\n<fill in>\n")
+        self.assertIn("placeholder", dispatch.spec_draft_problem(self.wt, 3, self.base) or "")
+        self.write("thoughts/3/spec.md", "# Spec\n\nStatus: draft\n")
+        self.write("src/app/x.py", "x = 1\n")
+        self.assertIn("src/app/x.py", dispatch.spec_draft_problem(self.wt, 3, self.base) or "")
+
 if __name__ == "__main__":
     unittest.main()
 

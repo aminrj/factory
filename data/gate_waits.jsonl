@@ -17,3 +17,11 @@
 {"ts": "2026-11-21T16:08:03+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate2", "answer": "go", "wait_min": 54.3, "comment_id": 630}
 {"ts": "2026-11-21T16:12:48+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_research_questions", "answer": "go", "wait_min": 1.5, "comment_id": 638}
 {"ts": "2026-11-21T16:17:08+01:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_research_questions", "answer": "go", "wait_min": 3.5, "comment_id": 642}
+{"ts": "2026-11-21T15:50:46+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate3", "answer": "go", "wait_min": 28.5, "comment_id": 669}
+{"ts": "2026-11-22T05:07:34+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 148.4, "comment_id": 716}
+{"ts": "2026-11-22T05:46:53+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "go", "wait_min": 31.9, "comment_id": 748}
+{"ts": "2026-11-22T05:49:03+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "go", "wait_min": 1.6, "comment_id": 754}
+{"ts": "2026-11-22T05:50:11+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "go", "wait_min": 0.7, "comment_id": 760}
+{"ts": "2026-11-22T05:51:19+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "go", "wait_min": 0.9, "comment_id": 764}
+{"ts": "2026-11-22T05:52:23+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "go", "wait_min": 0.9, "comment_id": 767}
+{"ts": "2026-11-22T06:17:18+00:00", "repo": "brevkoll", "issue": 19, "checkpoint": "after_gate4", "answer": "go", "wait_min": 24.5, "comment_id": 788}

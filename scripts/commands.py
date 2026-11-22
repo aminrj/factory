@@ -8,6 +8,7 @@ after its first word).
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -18,9 +19,14 @@ MODELS: dict[str, str] = {
     "fast": "Claude Sonnet (good and quicker)",
     "cheap": "Claude Haiku (lowest cost)",
 }
-OPTIONS: dict[str, str] = {"minutes": "N (your time on this gate)", "model": "|".join(MODELS)}
+# `/go` alone runs on the local model: the cloud is used only when the owner types `model=smart|fast|cheap`.
+DEFAULT_MODEL = os.environ.get("FACTORY_DEFAULT_MODEL", "local")
+# The owner's own time on a gate (reading, trying, deciding), in minutes. Typing `minutes=N` records N; without it the
+# gate's typical time below is recorded and marked `default`, so the metrics can tell measured time from a guess.
+GATE_MINUTES: dict[str, int] = {"spec": 10, "threat_model": 5, "plan_review": 10, "code_review": 15, "rework": 5}
+OPTIONS: dict[str, str] = {"minutes": "N (your own time on this gate, optional)", "model": "|".join(MODELS)}
 OPTION = re.compile(r"^([A-Za-z_][\w-]*)=(\S*)$")
-USAGE = "`/go [minutes=N] [model=" + "|".join(MODELS) + "]`, `/stop`, `/rework [model=...] <what is wrong>`"
+USAGE = "`/go [model=" + "|".join(MODELS) + "] [minutes=N]` (default: local model), `/stop`, `/rework [model=...] <what is wrong>`"
 
 
 @dataclass

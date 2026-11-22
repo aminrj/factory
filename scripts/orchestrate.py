@@ -11,7 +11,7 @@ State lives in the issue itself, so nothing has to stay open between steps:
     `<!--factory:resume=<handler>;stop=<what>-->` that says which handler runs on /go.
   * a comment that starts with `▶` means a step was picked up (or the run stopped). Ticks ignore those.
   * only comments by the Gitea user that owns the token count, and only the exact forms
-    `/go`, `/go minutes=N` and `/stop`. Everything else is data and is ignored.
+    `/go [model=P] [minutes=N]`, `/rework <note>` and `/stop`. Everything else is data and is ignored.
 Handlers call dispatch.py for every agent step, so the guards there still apply. A failed step posts a new
 checkpoint with the diagnosis (at most 2 retries per handler, then it asks for a session).
 Notifications go to a self-hosted ntfy if NTFY_URL and NTFY_TOPIC are set (env or ~/.config/factory/ntfy.env).
@@ -35,6 +35,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commands  # noqa: E402
 import mirror  # noqa: E402
+import lease  # noqa: E402
+import night  # noqa: E402
 from gitea import Gitea, Unreachable, is_owner_email  # noqa: E402
 
 WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
@@ -102,7 +104,11 @@ def commit_ops(msg: str) -> None:
         sh("git", "add", "RUNLOG.md", cwd=WORK)
         if sh("git", "diff", "--cached", "--name-only", cwd=WORK):
             sh("git", "commit", "-q", "-m", msg, "--", "RUNLOG.md", cwd=WORK)
-            sh("git", "push", "-q", "origin", "HEAD", cwd=WORK)
+        if sh("git", "log", "--oneline", "@{u}..HEAD", cwd=WORK):
+            # the owner merges docs PRs in factory-ops and a standby host writes here too: put ours on top, then push
+            if subprocess.run(["git", "push", "-q", "origin", "HEAD"], cwd=WORK, capture_output=True).returncode:
+                sh("git", "pull", "-q", "--rebase", "--autostash", "origin", "main", cwd=WORK)
+                sh("git", "push", "-q", "origin", "HEAD", cwd=WORK)
     except subprocess.CalledProcessError as e:
         alarm("commit-ops", "run log not pushed", f"could not commit or push factory-ops: {(e.stderr or '')[-200:]}")
 
@@ -171,6 +177,7 @@ class Ctx:
                  model: str | None = None):
         self.g, self.repo, self.n, self.minutes, self.go_id, self.marker = g, repo, n, minutes, go_id, marker
         self.model = model  # the owner's `model=` for this run; None is the account default
+        self.auto = False  # True when the night policy passed this gate, not the owner
         self.app = repo.split("/")[1]
         self.branch = f"agent/issue-{n}"
         self.clone = WORK / self.app
@@ -211,13 +218,19 @@ class Ctx:
         return self.g.call("POST", f"/repos/{self.repo}/issues/{self.n}/comments", {"body": body})
 
     def record_minutes(self, gate: str) -> None:
-        if self.minutes is None:
-            return
+        """The owner's time on this gate: typed with `minutes=N`, else the gate's typical time marked `default`, or
+        0 marked `auto` when the night policy passed the gate (nobody looked)."""
+        if self.auto:
+            minutes, source = 0, "auto"
+        elif self.minutes is not None:
+            minutes, source = self.minutes, "typed"
+        else:
+            minutes, source = commands.GATE_MINUTES.get(gate, 5), "default"
         DATA.mkdir(exist_ok=True)
         with (DATA / "human_minutes.jsonl").open("a") as fh:
             fh.write(json.dumps({"ts": now(), "repo": self.app, "issue": self.n, "gate": gate,
-                                 "minutes": self.minutes, "comment_id": self.go_id}) + "\n")
-        log(f"{self.app}#{self.n}: recorded {self.minutes} human minutes for gate {gate}")
+                                 "minutes": minutes, "source": source, "comment_id": self.go_id}) + "\n")
+        log(f"{self.app}#{self.n}: recorded {minutes} human minutes ({source}) for gate {gate}")
 
     def status_line(self) -> str:
         runs = [r for r in jsonl(DATA / "agent_runs.jsonl") if r.get("repo") == self.app and r.get("issue") == self.n]
@@ -302,16 +315,17 @@ def checkpoint(ctx: Ctx, label: str, title: str, body: str, resume: str, stop: s
     refresh_board()
     extra = ";".join(x for x in (extra, "rework=ok" if rework else "") if x)
     marker = f"<!--factory:resume={resume};stop={stop}{';' + extra if extra else ''}-->"
-    reply = ("Reply `/go minutes=N` to accept, `/rework <what is wrong>` to send it back, or `/stop` to stop."
-             if rework else "Reply `/go minutes=N` to continue or `/stop` to stop.")
+    reply = ("Reply `/go` to accept, `/rework <what is wrong>` to send it back, or `/stop` to stop."
+             if rework else "Reply `/go` to continue or `/stop` to stop.")
     files = files_section(ctx, resume)
     text = (f"{CP_PREFIX} {label}: {title}\n\n{body}\n\n{files + chr(10) * 2 if files else ''}{ctx.status_line()}\n\n"
             f"{reply}\n{marker}")
     c = ctx.comment(text)
     log(f"{ctx.app}#{ctx.n}: CHECKPOINT {label} posted (comment {c['id']}), resume={resume}")
     commit_ops(f"Checkpoint {label}: {ctx.app}#{ctx.n}")
-    notify(f"{ctx.app}: checkpoint {label}", f"{title}. Reply /go minutes=N on {ctx.app}#{ctx.n}.",
-           click=f"{ctx.url('/issues/' + str(ctx.n))}#issuecomment-{c['id']}")
+    notify(f"{ctx.app}: checkpoint {label}", f"{title}. Reply /go on {ctx.app}#{ctx.n}.",
+           click=f"{ctx.url('/issues/' + str(ctx.n))}#issuecomment-{c['id']}",
+           priority=1 if ctx.auto else 3)  # night shift: silent; the morning push sums the night up
 
 
 def dispatch(ctx: Ctx, step: str, note: str | None = None, note_kind: str = "ci") -> str:
@@ -399,14 +413,47 @@ def spec_approval_problem(clone: Path, branch: str, n: int, spec: str, human_ema
     return None
 
 
+def approve_by_policy(ctx: Ctx, name: str, edit: Callable[[str], str], what: str) -> None:
+    """The night shift passes a gate: one commit by factory-orchestrator with the policy trailer, pushed to the branch.
+    The owner sees it in the branch history and on Checkpoint 4; the guards accept it only while the label is on."""
+    # A short-lived detached worktree: the branch may be checked out in the agent's worktree, which fast-forwards to
+    # this commit on its next step.
+    wt = WORK / "worktrees" / f"{ctx.app}-issue-{ctx.n}-policy"
+    sh("git", "fetch", "-q", "origin", cwd=ctx.clone)
+    if wt.exists():
+        sh("git", "worktree", "remove", "--force", str(wt), cwd=ctx.clone)
+    sh("git", "worktree", "add", "-q", "--detach", str(wt), f"origin/{ctx.branch}", cwd=ctx.clone)
+    try:
+        path = wt / "thoughts" / str(ctx.n) / name
+        text = path.read_text()
+        new = edit(text)
+        if new == text:
+            return
+        path.write_text(new)
+        sh("git", "add", str(path.relative_to(wt)), cwd=wt)
+        sh("git", "commit", "-q", "-m", f"#{ctx.n} {what}: approved by the night policy\n\nThe issue carries the label "
+           f"{night.LABEL}; the owner reviews this at Checkpoint 4.\n\n{night.TRAILER}", cwd=wt)
+        sh("git", "push", "-q", "origin", f"HEAD:refs/heads/{ctx.branch}", cwd=wt)
+    finally:
+        sh("git", "worktree", "remove", "--force", str(wt), cwd=ctx.clone, check=False)
+    log(f"{ctx.app}#{ctx.n}: {what} approved by the night policy")
+
+
+def set_status(text: str, value: str = "approved") -> str:
+    return re.sub(r"^(\**Status:\**\s*)\w+", lambda m: m.group(1) + value, text, count=1, flags=re.IGNORECASE | re.MULTILINE)
+
+
 def after_gate1(ctx: Ctx) -> None:
     spec = ctx.branch_file("spec.md")
     if "<" in spec:
         raise NeedsHuman("`spec.md` still contains `<` placeholders. Fix them, push, then reply `/go` again.")
-    problem = spec_approval_problem(ctx.clone, ctx.branch, ctx.n, spec, sh("git", "config", "user.email", cwd=ctx.clone),
-                                    ctx.g.user)
-    if problem:
-        raise NeedsHuman(problem)
+    if ctx.auto:
+        approve_by_policy(ctx, "spec.md", set_status, "spec")
+    else:
+        problem = spec_approval_problem(ctx.clone, ctx.branch, ctx.n, spec, sh("git", "config", "user.email", cwd=ctx.clone),
+                                        ctx.g.user)
+        if problem:
+            raise NeedsHuman(problem)
     ctx.record_minutes("spec")
     dispatch(ctx, "threat-model")
     ctx.g.set_stage(ctx.repo, ctx.n, "spec-ready")
@@ -420,6 +467,10 @@ def after_gate1(ctx: Ctx) -> None:
 def after_gate2(ctx: Ctx) -> None:
     tm = ctx.branch_file("threat-model.md")
     hits = [(i, line) for i, line in enumerate(tm.splitlines(), 1) if re.search(r"\bPROPOSED\b", line)]
+    if hits and ctx.auto:
+        approve_by_policy(ctx, "threat-model.md", lambda t: re.sub(r"\bPROPOSED\b", "ACCEPTED (night policy)", t),
+                          f"threat model ({len(hits)} rows)")
+        hits = []
     if hits:
         shown = "\n".join(f"- line {i}: {line.strip()[:110]}" for i, line in hits[:10])
         raise NeedsHuman(f"`threat-model.md` still contains the word `PROPOSED` {len(hits)} time(s). The gate refuses any "
@@ -448,7 +499,7 @@ def answered_since_checkpoint(ctx: Ctx) -> bool:
 
 def after_research_questions(ctx: Ctx) -> None:
     st = ctx.state()
-    if not answered_since_checkpoint(ctx) and not st.get("nudged_questions"):
+    if not ctx.auto and not answered_since_checkpoint(ctx) and not st.get("nudged_questions"):
         st["nudged_questions"] = True
         ctx.save(st)
         raise NeedsHuman("You have not answered the research questions (no comment from you since they were asked). The planner "
@@ -510,6 +561,14 @@ def after_gate3(ctx: Ctx) -> None:
     status = plan_status(plan)
     if status == "rework":
         return after_plan_rework(ctx)
+    if status == "draft" and ctx.auto:
+        risky = night.risky_mentions(plan)
+        if risky:
+            raise NeedsHuman("The night shift does not approve a plan that touches risky areas (" + ", ".join(
+                f"`{r}`" for r in risky) + "). Read it; to build it, set `Status: approved` in a commit of your own "
+                "and reply `/go`, or `/rework <what to change>`.")
+        approve_by_policy(ctx, "plan.md", set_status, "plan")
+        status = "approved"
     if status == "draft":
         raise NeedsHuman("`plan.md` still says `Status: draft`, so there is nothing to build yet. To build it, change the line "
                          "to `Status: approved` in a commit of your own and reply `/go`. To change the plan, reply "
@@ -688,12 +747,31 @@ def validate_and_checkpoint(ctx: Ctx) -> None:
     title = re.sub(r"^WIP:\s*", "", pr["title"])
     ctx.g.call("PATCH", f"/repos/{ctx.repo}/pulls/{pr['number']}", {"title": title, "body": body})
     checkpoint(ctx, "4", "try it, review and merge",
-               f"All four checks are green on PR #{pr['number']}: {pr['html_url']}\nValidation report: "
+               f"{night_note(ctx)}All four checks are green on PR #{pr['number']}: {pr['html_url']}\nValidation report: "
                f"{ctx.file_link('validation.md')}\n\n{staging_block(ctx)}\n\n---\nThen read the full diff and merge "
-               f"it yourself (I removed `WIP:` and filled the minutes table). Reply `/go minutes=N` after the merge and I "
+               f"it yourself (I removed `WIP:` and filled the minutes table). Reply `/go` after the merge and I "
                f"will push `main` to the GitHub mirror and remove the staged build. If something is wrong, reply "
                f"`/rework <what is wrong>` instead and I will fix it and stage it again.",
                "after_gate4", rework=True)
+
+
+def night_note(ctx: Ctx) -> str:
+    """On Checkpoint 4: what the night policy approved instead of the owner, and the risky files the diff touches."""
+    try:
+        sh("git", "fetch", "-q", "origin", cwd=ctx.clone)
+        approved = sh("git", "log", "--grep", night.TRAILER, "--fixed-strings", "--format=%s", f"origin/main..origin/{ctx.branch}",
+                      cwd=ctx.clone).splitlines()
+        files = sh("git", "diff", "--name-only", f"origin/main...origin/{ctx.branch}", cwd=ctx.clone).splitlines()
+    except subprocess.CalledProcessError:
+        return ""
+    out = []
+    if approved:
+        out.append("🌙 **The night shift approved these, not you. Read them as if new:**\n" +
+                   "\n".join(f"- {a.split(': approved')[0]}" for a in approved))
+    risky = night.risky_files(files)
+    if risky:
+        out.append("⚠️ **The diff touches sensitive files:** " + ", ".join(f"`{f}`" for f in risky[:12]))
+    return "\n\n".join(out) + "\n\n" if out else ""
 
 
 def after_gate4(ctx: Ctx) -> None:
@@ -818,7 +896,22 @@ def decide(g: Gitea, repo: str, n: int) -> tuple[dict, dict, str, int | None] | 
             return pivot, c, "stop", None
         if REWORK.match(c["body"]):
             return pivot, c, "rework", None
-    return None
+    return night_command(g, repo, n, pivot, mine)
+
+
+NIGHT = {"taken": False}  # one night-shift action per tick (reset in run_command)
+
+
+def night_command(g: Gitea, repo: str, n: int, pivot: dict, mine: list[dict]) -> tuple[dict, dict, str, None] | None:
+    """No command from the owner: may the night shift answer this checkpoint itself? (scripts/night.py)"""
+    now = datetime.now(UTC)
+    if not night.in_window(now):
+        return None
+    labels = {label["name"] for label in g.get(f"/repos/{repo}/issues/{n}/labels")}
+    why = night.may_pass(pivot, parse_marker(pivot["body"]), labels, mine, now)
+    if why is None:
+        return None
+    return pivot, {"id": pivot["id"], "body": "/go", "auto": why}, "go", None
 
 
 class StopRequested(Exception):
@@ -872,16 +965,23 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         return "waiting"
     pivot, cmd, kind, minutes = d
     marker = parse_marker(pivot["body"])
-    try:
-        record_wait(app, n, pivot, cmd, kind)
-    except Exception as e:  # noqa: BLE001 - metrics must never block a gate
-        log(f"could not record the wait: {type(e).__name__}")
+    auto = cmd.get("auto")
+    if auto:
+        if NIGHT["taken"]:
+            return "waiting"  # one night item per tick: the GPU runs one model and one step at a time
+        NIGHT["taken"] = True
+    else:
+        try:
+            record_wait(app, n, pivot, cmd, kind)
+        except Exception as e:  # noqa: BLE001 - metrics must never block a gate
+            log(f"could not record the wait: {type(e).__name__}")
     ctx = Ctx(g, repo, n, minutes, cmd["id"], marker)
+    ctx.auto = bool(auto)
     opts = command_options(cmd["body"])
     if opts.errors:
         refuse(ctx, cmd["id"], "; ".join(opts.errors), f"send the command again without that option. Accepted: {commands.USAGE}.")
         return "refused"
-    ctx.model = opts.model
+    ctx.model = "local" if auto else (opts.model or commands.DEFAULT_MODEL)  # the night shift never spends credit
     if kind == "stop":
         stop_item(ctx, marker, cmd["id"])
         return "stopped"
@@ -902,10 +1002,24 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         ctx.comment(f"{CLAIM_PREFIX} I do not know what `/go` should run here (no resume marker). A session is needed.")
         notify(f"{app}: unclear checkpoint", f"{app}#{n} has no resume marker", priority=4)
         return "unknown"
-    ctx.comment(f"{CLAIM_PREFIX} Picked up `/{'rework' if kind == 'rework' else 'go'}` (comment {cmd['id']}"
-                f"{f', {minutes} min' if minutes is not None else ''}). Running `{handler}` on model "
-                f"`{ctx.model or 'default'}`.")
+    if auto:
+        ctx.comment(f"{CLAIM_PREFIX} 🌙 Night shift (label `{night.LABEL}`): no command from you, so I pass checkpoint "
+                    f"`{night.checkpoint_label(pivot['body'])}` myself: {auto}. Running `{handler}` on model `local`. "
+                    "You review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
+    else:
+        ctx.comment(f"{CLAIM_PREFIX} Picked up `/{'rework' if kind == 'rework' else 'go'}` (comment {cmd['id']}"
+                    f"{f', {minutes} min' if minutes is not None else ''}). Running `{handler}` on model "
+                    f"`{ctx.model or 'default'}`.")
     log(f"{app}#{n}: /go (comment {cmd['id']}, minutes={minutes}, model={ctx.model}) -> {handler}")
+    if auto:
+        result = run_handler(g, repo, n, ctx, marker, handler)
+        night.record(STATE, datetime.now(UTC), f"{app}#{n}", handler, result)
+        return result
+    return run_handler(g, repo, n, ctx, marker, handler)
+
+
+def run_handler(g: Gitea, repo: str, n: int, ctx: Ctx, marker: dict[str, str], handler: str) -> str:
+    app = repo.split("/")[1]
     try:
         HANDLERS[handler](ctx)
         return f"ran {handler}"
@@ -1287,9 +1401,92 @@ def each_issue(issues: list[tuple[str, int]], what: str, fn: Callable[[str, int]
                   f"{type(e).__name__}: {str(e)[:160]}. The other issues were handled; this one is retried every tick.")
 
 
+def night_tick(g: Gitea) -> None:
+    """After the issues: pick up one labeled issue that has no checkpoint yet, and send the morning summary once."""
+    if not night.enabled():
+        return
+    now = datetime.now(UTC)
+    rows = night.summary_due(STATE, now)
+    if rows:  # nothing happened: no push at all
+        notify("factory: the night shift", night.summary_text(rows), priority=3)
+    repos = sorted(x["full_name"] for x in g.paged("/repos/search?q=factory-app&topic=true"))
+    made = STATE / "night-label.txt"  # the label exists in every app repo, so the owner can pick it from the list
+    if made.exists() is False or made.read_text().split() != repos:
+        for repo in repos:
+            g.ensure_label(repo, night.LABEL, "#6366f1", "Night shift may pass the gates before the code (docs/night-shift.md)")
+        STATE.mkdir(parents=True, exist_ok=True)
+        made.write_text("\n".join(repos))
+    if NIGHT["taken"] or not night.in_window(now):
+        return
+    for repo in repos:
+        for i in g.paged(f"/repos/{repo}/issues?state=open&type=issues&labels={night.LABEL}"):
+            if night.LABEL not in {label["name"] for label in i.get("labels", [])}:
+                continue
+            mine = [c for c in g.paged(f"/repos/{repo}/issues/{i['number']}/comments") if c["user"]["login"] == g.user]
+            if any(c["body"].startswith((CP_PREFIX, CLAIM_PREFIX)) for c in mine):
+                continue  # already in the loop: decide() handles it
+            NIGHT["taken"] = True
+            adopt(g, repo, i["number"], i["title"])
+            return
+
+
+def adopt(g: Gitea, repo: str, n: int, title: str) -> None:
+    """Start a labeled issue: an agent drafts the spec and the holdout tests, then Checkpoint 1 (passed on the next tick)."""
+    ctx = Ctx(g, repo, n, None, 0, {}, model="local")
+    ctx.auto = True
+    app = repo.split("/")[1]
+    ctx.comment(f"{CLAIM_PREFIX} 🌙 Night shift (label `{night.LABEL}`): picking up this issue. An agent drafts the spec "
+                "and the holdout tests from it on model `local`; then Checkpoint 1, which I pass on the next tick. You "
+                "review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
+    g.set_stage(repo, n, "idea")
+    try:
+        dispatch(ctx, "spec")
+    except StepFailed as e:
+        night.record(STATE, datetime.now(UTC), f"{app}#{n}", "spec", "failed")
+        checkpoint(ctx, "spec-failed", "the night shift could not draft the spec",
+                   f"```\n{str(e)[-1200:]}\n```\n\nWrite the spec yourself (factory `scripts/new_change.py`), or fix "
+                   "the cause and remove and re-add the label to try again tonight.", "manual")
+        return
+    night.record(STATE, datetime.now(UTC), f"{app}#{n}", "spec", "drafted")
+    checkpoint(ctx, "1", "spec and holdout tests (drafted by the night shift)",
+               f"An agent drafted the spec and the holdout tests for \"{title}\" on `{ctx.branch}`:\n\n"
+               f"- [spec.md]({ctx.file_link('spec.md')})\n\nThe night shift passes this checkpoint on the next tick. To "
+               "take it yourself, remove the label and answer as usual.", "after_gate1")
+
+
+def hold_lease(g: Gitea) -> bool:
+    """Only the host holding the lease acts (scripts/lease.py). A primary that cannot use the lease (an old token, the
+    API down) still ticks and says so; a standby never acts without it."""
+    if not lease.enabled():
+        return True
+    ls = lease.Lease(g)
+    try:
+        ok, why = ls.claim()
+    except Unreachable:
+        raise
+    except Exception as e:  # noqa: BLE001
+        if lease.role() == "standby":
+            print(f"lease: unreadable ({type(e).__name__}); a standby does not act")
+            return False
+        alarm("lease", "the foreman lease does not work",
+              f"{type(e).__name__}: {str(e)[:160]}. This host keeps ticking; a standby will not take over.")
+        return True
+    print(f"lease ({lease.role()} {ls.me}): {why}")
+    if not ok:
+        return False
+    if why.startswith("took over"):
+        alarm("standby-took-over", f"the standby {ls.me} took over",
+              f"{why}: the primary stopped renewing the foreman lease. Work continues here and goes back when the "
+              "primary is seen again.")
+    ls.keepalive()
+    return True
+
+
 def run_command(g: Gitea, a: argparse.Namespace) -> None:
     live = a.cmd == "tick" and not a.dry_run
     if live and not guard_runtime():
+        return
+    if live and not hold_lease(g):
         return
     issues = active_issues(g)  # listed once per tick: every extra listing is another chance to meet a stalled request
     if live:
@@ -1315,8 +1512,15 @@ def run_command(g: Gitea, a: argparse.Namespace) -> None:
         for w in waiting_list(g):
             print(f"WAITING FOR YOU: {w['repo']}#{w['issue']} at {w['what']} since {w['since']} ({w['age_h']} h)")
     else:
+        NIGHT["taken"] = False
         each_issue(issues, "processing", lambda r, n: print(f"{r}#{n}: {process(g, r, n, dry=a.dry_run)}"))
     if live:
+        try:
+            night_tick(g)
+        except Unreachable:
+            raise
+        except Exception as e:  # noqa: BLE001
+            alarm("night", "the night shift failed", f"{type(e).__name__}: {str(e)[:160]}")
         try:
             remind_waiting(g)
         except Unreachable:

@@ -483,6 +483,26 @@ class GateTests(unittest.TestCase):
         recorded = (orchestrate.DATA / "human_minutes.jsonl").read_text()
         self.assertIn('"minutes": 5', recorded)
 
+    def test_a_bare_go_runs_on_the_local_model_and_records_the_gate_default(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
+        self.agent_files["plan"] = PLAN
+        self.go("/go")
+        self.assertEqual(self.calls[-1]["model"], "local")
+        rec = [json.loads(x) for x in (orchestrate.DATA / "human_minutes.jsonl").read_text().splitlines()][-1]
+        self.assertEqual((rec["minutes"], rec["source"]), (10, "default"))
+
+    def test_typed_model_and_minutes_win_over_the_defaults(self) -> None:
+        self.commit_file("research.md", "# Research\n")
+        self.checkpoint("after_research_questions", "2b")
+        self.g.comment("owner/app", 1, "My answers: yes to both.")
+        self.agent_files["plan"] = PLAN
+        self.go("/go model=smart minutes=3")
+        self.assertEqual(self.calls[-1]["model"], "smart")
+        rec = [json.loads(x) for x in (orchestrate.DATA / "human_minutes.jsonl").read_text().splitlines()][-1]
+        self.assertEqual((rec["minutes"], rec["source"]), (3, "typed"))
+
     # -- after the owner merged
     def test_after_the_merge_the_staged_build_goes_and_main_is_mirrored(self) -> None:
         self.checkpoint("after_gate4", "4")

@@ -5,9 +5,10 @@
 # only after the branch is merged and that clone is updated. Usage: ops/install-timers.sh [--uninstall]
 set -euo pipefail
 here="$(cd "$(dirname "$0")/systemd" && pwd)"
-units=(factory-tick nightly-health lookback rework-digest)
+units=(factory-tick factory-status nightly-health lookback rework-digest)
 if [ "${1:-}" = "--uninstall" ]; then
   for u in "${units[@]}"; do systemctl --user disable --now "$u.timer" 2>/dev/null || true; done
+  systemctl --user disable --now factory-board.service 2>/dev/null || true
   systemctl --user daemon-reload
   exit 0
 fi
@@ -16,4 +17,9 @@ for u in "${units[@]}"; do
   systemctl --user link "$here/$u.service" "$here/$u.timer"
   systemctl --user enable --now "$u.timer"
 done
-systemctl --user list-timers --no-pager | grep -E 'factory-tick|nightly-health|lookback|rework-digest' || true
+# the board page (served, not timed): only where staging.env names the address to listen on
+if [ -f "$HOME/.config/factory/staging.env" ]; then
+  systemctl --user link "$here/factory-board.service"
+  systemctl --user enable --now factory-board.service
+fi
+systemctl --user list-timers --no-pager | grep -E 'factory-tick|factory-status|nightly-health|lookback|rework-digest' || true

@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the factory status page every minute (independent of the foreman tick)
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

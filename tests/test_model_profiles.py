@@ -209,5 +209,94 @@ class ShimTests(unittest.TestCase):
         self.assertRegex(line, r"^PORT \d+$")
 
 
+def free_port() -> int:
+    sock = __import__("socket").socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+class Named(FakeUpstream):
+    name = "qwen3.6-35b-a3b"
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.reply(200, json.dumps({"models": [{"name": Named.name}]}).encode())
+
+
+class PickTests(unittest.TestCase):
+    """`local` is whichever local model serves now, in the configured order; the factory never loads one."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.up = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Named)
+        threading.Thread(target=self.up.serve_forever, daemon=True).start()
+        self.addCleanup(self.up.shutdown)
+        self.live = f"http://127.0.0.1:{self.up.server_address[1]}"
+        self.dead = f"http://127.0.0.1:{free_port()}"
+
+    def cfg(self, **kw: str) -> dict[str, str]:
+        return model_shim.load_config(Path(self.tmp.name) / "none.env",
+                                      {"LOCAL_MODEL_KEY_FILE": str(Path(self.tmp.name) / "nokey"), **kw})
+
+    def test_the_first_server_that_answers_is_used_with_the_name_it_serves(self) -> None:
+        found, _ = model_shim.pick(self.cfg(LOCAL_MODEL_SERVERS=f"code={self.dead},38={self.live},agent={self.dead}"))
+        assert found is not None
+        self.assertEqual((found["LOCAL_MODEL_SERVER"], found["LOCAL_MODEL_URL"], found["LOCAL_MODEL_NAME"]),
+                         ("38", self.live, "qwen3.6-35b-a3b"))
+
+    def test_nothing_serving_names_each_server(self) -> None:
+        found, why = model_shim.pick(self.cfg(LOCAL_MODEL_SERVERS=f"code={self.dead},agent={self.dead}"))
+        self.assertIsNone(found)
+        self.assertIn("code: unreachable", why)
+        self.assertIn("agent: unreachable", why)
+
+    def test_without_a_server_list_the_single_url_is_used(self) -> None:
+        found, _ = model_shim.pick(self.cfg(LOCAL_MODEL_URL=self.live))
+        self.assertEqual(found and found["LOCAL_MODEL_SERVER"], "local")
+
+    def test_an_unreachable_host_is_woken_once_then_the_model_is_used(self) -> None:
+        marker = Path(self.tmp.name) / "woken"
+        cfg = self.cfg(LOCAL_MODEL_SERVERS=f"code={self.dead}", LOCAL_MODEL_ARBITER_URL=self.dead,
+                       LOCAL_MODEL_WAKE_CMD=f"echo x >> {marker}")
+        t = [0.0]
+        ticks = [0]
+
+        def sleep(s: float) -> None:
+            t[0] += s
+            ticks[0] += 1
+            if ticks[0] == 3:  # the PC came up on the third poll
+                cfg["LOCAL_MODEL_SERVERS"] = f"code={self.live}"
+        found, why = model_shim.wait_for_model(cfg, 600, sleep=sleep, clock=lambda: t[0])
+        self.assertIsNotNone(found, why)
+        self.assertEqual(marker.read_text().count("x"), 1)
+
+    def test_a_gpu_the_owner_holds_is_never_asked_for(self) -> None:
+        class Desk(FakeUpstream):
+            def do_GET(self) -> None:  # noqa: N802
+                self.reply(200, b'{"state": "desk", "reason": "llm code is serving elsewhere"}')
+
+            def do_POST(self) -> None:  # noqa: N802
+                FakeUpstream.seen.append({"path": self.path})
+                self.reply(200, b"{}")
+        arb = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Desk)
+        threading.Thread(target=arb.serve_forever, daemon=True).start()
+        self.addCleanup(arb.shutdown)
+        FakeUpstream.seen = []
+        cfg = self.cfg(LOCAL_MODEL_SERVERS=f"code={self.dead}",
+                       LOCAL_MODEL_ARBITER_URL=f"http://127.0.0.1:{arb.server_address[1]}")
+        found, why = model_shim.wait_for_model(cfg, 600, sleep=lambda s: None)
+        self.assertIsNone(found)
+        self.assertIn("the GPU is the owner's", why)
+        self.assertEqual(FakeUpstream.seen, [])  # no POST /request
+
+    def test_check_prints_server_and_name(self) -> None:
+        env = {"LOCAL_MODEL_SERVERS": f"code={self.live}", "HOME": self.tmp.name}
+        out = subprocess.run([sys.executable, "-I", str(ROOT / "scripts" / "model_shim.py"), "check"],
+                             capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(out.stdout.strip(), "ok code qwen3.6-35b-a3b")
+
+
 if __name__ == "__main__":
     unittest.main()

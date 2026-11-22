@@ -1,0 +1,11 @@
+[Unit]
+Description=Factory status page and immediate answers to commands (scripts/status.py)
+
+[Service]
+Type=oneshot
+Environment=WORK=%h/git/software-factory
+EnvironmentFile=-%h/.config/factory/host.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/git/software-factory
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/status.py
+TimeoutStartSec=5min

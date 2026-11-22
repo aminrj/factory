@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stage  # noqa: E402
 
 CONF = stage.CONF
-TIMERS = ("factory-tick.timer", "nightly-health.timer", "lookback.timer", "rework-digest.timer")
+TIMERS = ("factory-tick.timer", "factory-status.timer", "nightly-health.timer", "lookback.timer", "rework-digest.timer")
 results: list[tuple[str, str, str]] = []
 
 
