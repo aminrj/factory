@@ -19,13 +19,31 @@ import os
 import time
 from pathlib import Path
 
-RECENT = 12  # lines of the agent's own words and actions kept in the JSON
+RECENT = 80  # entries kept for the board: the agent's words, its thinking, its actions and what they returned
+RESULT_LINES = 6  # first lines of each tool result shown on the board (the .log file keeps it all)
 WRITE_EVERY_S = 2.0
 
 
 def short(text: str, limit: int = 160) -> str:
     one = " ".join(str(text).split())
     return one if len(one) <= limit else one[: limit - 1] + "…"
+
+
+def clip(text: str, lines: int = RESULT_LINES, width: int = 200) -> str:
+    """The first lines of a block of text, each cut to `width`: enough to see what came back."""
+    rows = [r.rstrip() for r in str(text).strip().splitlines() if r.strip()]
+    out = [r if len(r) <= width else r[: width - 1] + "…" for r in rows[:lines]]
+    if len(rows) > lines:
+        out.append(f"… {len(rows) - lines} more lines")
+    return "\n    ".join(out)
+
+
+def result_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+    return ""
 
 
 def describe_tool(name: str, inp: dict) -> tuple[str, str | None]:
@@ -61,11 +79,13 @@ class Live:
             self.log = None
         self.write(force=True)
 
-    def line(self, text: str) -> None:
+    def line(self, text: str, board: str | None = None) -> None:
+        """One entry: in full in the .log file, as `board` (default: one line of up to 400 characters) on the board."""
         stamp = time.strftime("%H:%M:%S")
         if self.log:
-            self.log.write(f"{stamp} {text}\n")
-        self.state["recent"] = (self.state["recent"] + [f"{stamp} {short(text, 220)}"])[-RECENT:]
+            self.log.write(f"{stamp} {str(text)[:20000]}\n")
+        shown = board if board is not None else short(text, 400)
+        self.state["recent"] = (self.state["recent"] + [f"{stamp} {shown}"])[-RECENT:]
 
     def note(self, text: str) -> None:
         """A line from the factory itself (checks, self-fix rounds)."""
@@ -79,14 +99,18 @@ class Live:
             self.state["turns"] += 1
             for block in (ev.get("message") or {}).get("content") or []:
                 if block.get("type") == "text" and block.get("text", "").strip():
-                    self.line(block["text"].strip())
+                    self.line(block["text"].strip(), clip(block["text"], 10, 300))
+                elif block.get("type") == "thinking" and block.get("thinking", "").strip():
+                    thought = block["thinking"].strip()
+                    self.line(f"💭 {thought}", f"💭 ({len(thought)} chars) {short(thought, 300)}")
                 elif block.get("type") == "tool_use":
                     inp = block.get("input") or {}
                     if self.prefix:  # paths relative to the worktree read better on a phone
                         inp = {k: (v.removeprefix(self.prefix) if isinstance(v, str) else v) for k, v in inp.items()}
                     what, path = describe_tool(block.get("name", ""), inp)
                     self.state["action"] = what
-                    self.line(f"→ {what}")
+                    full = f"→ runs `{inp.get('command', '')}`" if block.get("name") == "Bash" else f"→ {what}"
+                    self.line(full, short(full, 400))
                     if path and path not in self.state["files"]:
                         self.state["files"].append(path)
                     if block.get("name") == "TodoWrite":  # older Claude Code: the whole list each time
@@ -103,10 +127,13 @@ class Live:
                 self.state["todos"].append({"id": str(task["id"]), "text": short(task.get("subject", ""), 120),
                                             "status": "pending"})
             for block in (ev.get("message") or {}).get("content") or []:
-                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
-                    content = block.get("content")
-                    text = content if isinstance(content, str) else json.dumps(content)[:300]
-                    self.line(f"  ✗ {short(text, 200)}")
+                if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                    continue
+                text = result_text(block.get("content"))
+                if not text.strip():
+                    continue
+                mark = "✗" if block.get("is_error") else "←"
+                self.line(f"  {mark} {text}", f"  {mark} {clip(text)}")
         elif kind == "result":
             self.state["action"] = "finished" if not ev.get("is_error") else "ended with an error"
         self.write()

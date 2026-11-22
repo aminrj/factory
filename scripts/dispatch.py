@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from commands import DEFAULT_MODEL, MODELS  # noqa: E402
 from gitea import Gitea, by_owner, is_owner_email, label_added_by_owner, ours  # noqa: E402
 from live import Live  # noqa: E402
+from mirror import scrub  # noqa: E402
 
 STEPS = ["spec", "threat-model", "research", "plan", "implement", "validate"]
 ORCH_NAME, ORCH_EMAIL = "factory-orchestrator", "factory-orchestrator@users.noreply.local"
@@ -97,16 +98,23 @@ def model_args(profile: str | None, env: dict[str, str], shim_url: str | None = 
 
 # What a failed run means for the owner. The first match wins; the text is Claude Code's result or stderr.
 FAILURE_CLASSES = [
+    ("stalled", re.compile(r"\bstalled: ")),
     ("credit_exhausted", re.compile(r"hit your .{0,20}limit|usage limit|credit balance is too low|out of (credits|extra usage)"
                                     r"|spend(ing)? limit|billing", re.I)),
     ("auth", re.compile(r"invalid api key|authentication|unauthori[sz]ed|\b401\b|please run /login|oauth token", re.I)),
     ("rate_limit", re.compile(r"rate.?limit|\b429\b|overloaded", re.I)),
     ("model_unavailable", re.compile(r"\b50[234]\b|local model unreachable|loading model|service unavailable", re.I)),
 ]
+# A local run that has not finished after this many turns is going in circles (brevkoll#29: 110 turns of denied
+# commands and debug scripts). It stops and says so; `/go model=fast` hands the step to the cloud.
+LOCAL_MAX_TURNS = 80
+
 HINTS = {
     "credit_exhausted": "The cloud credit or the usage limit is used up. Reply `/go model=local` to run this step on the "
                         "local model, or wait for the reset and reply `/go`.",
     "auth": "Claude Code is not logged in on the factory host. Log in there (`claude /login`), then reply `/go`.",
+    "stalled": "The model went in circles: its retrospectives showed no progress, or it used its turns without "
+               "finishing. Reply `/go model=fast` to give this step to Claude, or `/go` to let the local model try again.",
     "rate_limit": "The model provider is rate limiting. Reply `/go` in a few minutes.",
     "model_unavailable": "The model did not answer (502/503: loading, the GPU is in use, or the host is off). Reply `/go` "
                          "later, or `/go model=fast` to use the cloud.",
@@ -418,7 +426,8 @@ def write_issue_snapshot(g: Gitea, repo: str, n: int, wt: Path) -> None:
             continue  # foreman and dispatcher comments are not the human's words (and their links are internal names)
         body += ["", f"## Comment by {c['user']['login']} ({c['created_at']})", "", c["body"]]
     (wt / "thoughts" / str(n)).mkdir(parents=True, exist_ok=True)  # a new item (the spec step) has no folder yet
-    (wt / "thoughts" / str(n) / "issue.md").write_text("\n".join(body) + "\n")
+    # issue.md is committed on a branch that reaches the mirrored `main`: no private names in it
+    (wt / "thoughts" / str(n) / "issue.md").write_text(scrub("\n".join(body)) + "\n")
 
 
 def agent_forbidden(wt: Path, n: int) -> list[str]:
@@ -501,8 +510,8 @@ def refuse_evasion(wt: Path, branch: str, head_before: str, found: list[str]) ->
     raise SystemExit(EVASION_EXIT)
 
 
-SELF_FIX_ROUNDS = int(os.environ.get("FACTORY_SELF_FIX_ROUNDS", "2"))
-CHECK_TIMEOUT_S = int(os.environ.get("FACTORY_CHECK_TIMEOUT_S", "600"))
+SELF_FIX_ROUNDS = 2  # a failed local check goes back to the same session at most twice
+CHECK_TIMEOUT_S = 600
 
 
 def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: Live, deadline: float) -> dict:
@@ -539,9 +548,125 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
     if result is None:
         why = f"timed out after {TIMEOUT_S // 60} min" if time.time() >= deadline else "ended without a result"
         result = {"result": f"{why}\n" + "\n".join(other)[-2000:] + "".join(err)[-1000:], "is_error": True}
+    if result.get("subtype") == "error_max_turns":
+        result["result"] = f"stalled: reached the turn limit ({result.get('num_turns')} turns)"
     if proc.returncode not in (0, None) and not result.get("is_error"):
         result["is_error"] = True
     return result
+
+
+# ---------------------------------------------------------------- retrospectives
+# 2026-11-22, the owner: models "should do a retrospect of what it does or what it is doing after some turns". Every
+# RETRO_EVERY turns the run pauses and the agent writes five lines (goal, done, stuck, next, files). The dispatcher does
+# not take its word for it: it compares the note with the facts in the worktree (commits, changed files, files no agent
+# may touch) and decides. Progress: continue, with the facts and a warning about refused files. Two pauses in a row
+# with no change at all: the run is stalled and stops (a local model going in circles burnt 30-70 min per item that
+# day). The notes go on the board and into the step's comment.
+RETRO_EVERY = {"local": 25}.get  # turns between two pauses; cloud runs use RETRO_EVERY_CLOUD
+RETRO_EVERY_CLOUD = 40
+MAX_TURNS = {"local": LOCAL_MAX_TURNS}
+MAX_TURNS_CLOUD = 160
+RETRO_PROMPT = (
+    "Pause. Use no tool in this answer. Write your retrospective in exactly these five lines, nothing else:\n"
+    "GOAL: <what this step must deliver>\nDONE: <what is finished and committed>\n"
+    "STUCK: <what does not work and why, or 'nothing'>\nNEXT: <the one next action>\nFILES: <the files you are changing>"
+)
+RETRO_KEYS = ("GOAL", "DONE", "STUCK", "NEXT", "FILES")
+FORBIDDEN = r"^(tests/holdout/|\.gitea/workflows/|\.claude/settings\.json|scripts/check-|thoughts/{n}/spec\.md)"
+
+
+def parse_retro(text: str) -> dict[str, str]:
+    out = {}
+    for line in (text or "").splitlines():
+        m = re.match(r"^\W*(GOAL|DONE|STUCK|NEXT|FILES)\W*:\s*(.*)$", line.strip(), re.IGNORECASE)
+        if m:
+            out[m.group(1).upper()] = m.group(2).strip(" *_`")[:300]
+    return out
+
+
+def worktree_facts(wt: Path, head_before: str, n: int) -> dict:
+    """What the run has really done so far: commits, changed files (committed or not), refused files, a fingerprint."""
+    commits = int(run("git", "rev-list", "--count", f"{head_before}..HEAD", cwd=wt, check=False) or 0)
+    changed = set(run("git", "diff", "--name-only", head_before, cwd=wt, check=False).splitlines())
+    changed |= {ln[3:] for ln in run("git", "status", "--porcelain", "--untracked-files=all", cwd=wt, check=False).splitlines() if len(ln) > 3}
+    changed = {f for f in changed if f}
+    rx = re.compile(FORBIDDEN.format(n=n))
+    diff = run("git", "diff", head_before, cwd=wt, check=False)
+    return {"commits": commits, "changed": sorted(changed), "refused": sorted(f for f in changed if rx.match(f)),
+            "fingerprint": hash((commits, diff, tuple(sorted(changed))))}
+
+
+def judge(retro: dict[str, str], facts: dict, previous: dict | None) -> tuple[str, str]:
+    """('continue' | 'stalled', the message for the agent or the owner)."""
+    if previous is not None and facts["fingerprint"] == previous["fingerprint"] and previous.get("unchanged"):
+        return "stalled", (f"no change in the worktree for two pauses in a row; the agent said: stuck on "
+                           f"\"{retro.get('STUCK') or '?'}\", next \"{retro.get('NEXT') or '?'}\"")
+    lines = [f"The factory checked the worktree: {facts['commits']} commit(s) in this step, changed files: "
+             + (", ".join(facts["changed"][:12]) or "none") + "."]
+    if facts["refused"]:
+        lines.append("These files may not be changed by an agent and the whole step will be refused if they stay "
+                     "changed: " + ", ".join(facts["refused"]) + ". Undo those changes now (git checkout -- <file>, or a "
+                     "new commit that restores them) and solve the task in the code instead.")
+    if previous is not None and facts["fingerprint"] == previous["fingerprint"]:
+        lines.append("Nothing changed since your last pause. Do not repeat what did not work: take a different "
+                     "approach, or if the task cannot be done, stop and say exactly why.")
+    lines.append(f"You said your next action is: {retro.get('NEXT') or '(none)'}. Continue from there and finish the step.")
+    return "continue", "\n".join(lines)
+
+
+def agent_session(base_cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: Live, deadline: float,
+                  model: str, head_before: str, n: int) -> dict:
+    """One agent run in chunks of turns with a retrospective between chunks. Returns the last result with the summed
+    cost, turns and usage, and `retros`: the notes and the decision after each."""
+    every = RETRO_EVERY(model) or RETRO_EVERY_CLOUD
+    cap = MAX_TURNS.get(model, MAX_TURNS_CLOUD)
+    cost, turns, usage, retros = 0.0, 0, {}, []
+    previous: dict | None = None
+    cmd, text = base_cmd, prompt
+
+    def add(res: dict) -> None:
+        nonlocal cost, turns
+        cost += float(res.get("total_cost_usd") or 0)
+        turns += int(res.get("num_turns") or 0)
+        for k, v in (res.get("usage") or {}).items():
+            if isinstance(v, (int, float)):
+                usage[k] = usage.get(k, 0) + v
+
+    while True:
+        result = run_agent([*cmd, "--max-turns", str(min(every, max(1, cap - turns)))], text, wt, env, live, deadline)
+        add(result)
+        sid = result.get("session_id")
+        if result.get("subtype") != "error_max_turns" or not sid:
+            break
+        if turns >= cap or time.time() > deadline - 180:
+            result = {**result, "is_error": True, "result": f"stalled: reached the turn limit ({turns} turns)"}
+            break
+        live.note(f"retrospective after {turns} turns")
+        at = turns
+        retro_res = run_agent([*base_cmd, "--resume", sid, "--max-turns", "2"], RETRO_PROMPT, wt, env, live, deadline)
+        add(retro_res)
+        retro = parse_retro(str(retro_res.get("result") or ""))
+        facts = worktree_facts(wt, head_before, n)
+        verdict, message = judge(retro, facts, previous)
+        retros.append({"turns": at, **retro, "commits": facts["commits"], "changed": len(facts["changed"]),
+                       "refused": facts["refused"], "verdict": verdict})
+        live.note(f"retrospective: {verdict}; stuck: {retro.get('STUCK') or '?'}; next: {retro.get('NEXT') or '?'}")
+        if verdict == "stalled":
+            result = {**result, "is_error": True, "result": f"stalled: {message}"}
+            break
+        facts["unchanged"] = previous is not None and facts["fingerprint"] == previous["fingerprint"]
+        previous = facts
+        cmd, text = [*base_cmd, "--resume", sid], message
+    result = {**result, "total_cost_usd": cost, "num_turns": turns, "usage": usage, "retros": retros}
+    return result
+
+
+def retro_digest(retros: list[dict]) -> str:
+    """The retrospectives of a run, for its comment (folded) and for the escalation note."""
+    rows = [f"- after {r['turns']} turns ({r['verdict']}): done: {r.get('DONE') or '?'}; stuck: {r.get('STUCK') or '?'}; "
+            f"next: {r.get('NEXT') or '?'}; facts: {r['commits']} commit(s), {r['changed']} file(s) changed"
+            + (f", refused files {', '.join(r['refused'])}" if r["refused"] else "") for r in retros]
+    return "\n".join(rows)
 
 
 def app_checks(wt: Path, step: str = "validate", n: int | None = None) -> list[str]:
@@ -681,7 +806,7 @@ def main() -> None:
         heading = ("Owner feedback on the previous plan draft" if step == "plan"
                    else "Owner rework request" if args.note_kind == "owner" else "CI failure note")
         with (wt / "thoughts" / str(n) / "issue.md").open("a") as fh:
-            fh.write(f"\n## {heading} (data, written by the foreman)\n\n{args.note}\n")
+            fh.write(f"\n## {heading} (data, written by the foreman)\n\n{scrub(args.note)}\n")
     head_before = run("git", "rev-parse", "HEAD", cwd=wt)
 
     prompt = (
@@ -725,8 +850,10 @@ def main() -> None:
     deadline = t0 + TIMEOUT_S
     skipped: set[str] = set()
     local_ok = False
+    retros: list[dict] = []
     try:
-        result = run_agent(base_cmd, prompt, wt, env, live, deadline)
+        result = agent_session(base_cmd, prompt, wt, env, live, deadline, args.model, head_before, n)
+        retros = result.get("retros") or []
         # The inner loop (2026-11-22): run the app's checks here, and give a failure back to the same agent session
         # at once, instead of push, wait for CI, start a new agent with a note. That round trip was most of the time
         # an item spent after the agent itself had finished in a minute.
@@ -756,7 +883,8 @@ def main() -> None:
                 break
             live.state["round"] = r + 2
             live.note(f"self-fix round {r + 1}: `{command}` failed, back to the agent")
-            result = run_agent([*base_cmd, "--resume", sid], self_fix_prompt(n, command, out), wt, env, live, deadline)
+            result = run_agent([*base_cmd, "--resume", sid, "--max-turns", str(RETRO_EVERY(args.model) or RETRO_EVERY_CLOUD)],
+                               self_fix_prompt(n, command, out), wt, env, live, deadline)
             cost += float(result.get("total_cost_usd") or 0)
             turns += int(result.get("num_turns") or 0)
             for k, v in (result.get("usage") or {}).items():
@@ -774,7 +902,7 @@ def main() -> None:
         "ts": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"), "repo": args.repo, "issue": n, "step": step,
         "duration_s": duration, "cost_usd": result.get("total_cost_usd"), "turns": result.get("num_turns"),
         "is_error": bool(result.get("is_error")) or proc.returncode != 0, "fallback": False,
-        "model": args.model or "default",
+        "model": args.model or "default", "retros": len(retros),
     }
     if args.model == "local":
         # Nothing is spent in the cloud. For the benchmark the run is priced as if the `fast` profile had done it (its
@@ -791,7 +919,9 @@ def main() -> None:
     if record["is_error"]:
         tail = str(result.get("result"))[-500:]
         kind = classify(tail)
+        digest = retro_digest(retros)
         die(f"claude run failed (see data/agent_runs.jsonl). Tail: {tail}"
+            + (f"\nRetrospectives:\n{digest}" if digest else "")
             + (f"\n[class: {kind}] {HINTS[kind]}" if kind else ""))
 
     if run("git", "status", "--porcelain", cwd=wt):  # leftovers the agent did not commit
@@ -840,6 +970,10 @@ def main() -> None:
     except SystemExit as refused:
         if isinstance(refused.code, str):  # a guard said no: nothing is pushed, and nothing may stay behind either
             keep_refused(wt, branch, head_before)
+        if refused.code not in (0, None, DECLINED_EXIT):  # the run's minutes bought nothing: the board counts them
+            with (DATA / "refusals.jsonl").open("a") as fh:
+                fh.write(json.dumps({"ts": record["ts"], "repo": args.repo, "issue": n, "step": step,
+                                     "model": record["model"], "duration_s": duration}) + "\n")
         raise
 
     run("git", "push", "-q", "-u", "origin", branch, cwd=wt)
@@ -856,10 +990,14 @@ def main() -> None:
     icon = {"completed": "✅", "in_progress": "▶️"}
     tasks = "".join(f"- {icon.get(t['status'], '⬜')} {t['text']}\n" for t in live.state["todos"])
     tasks = f"**Task list**\n{tasks}\n" if tasks else ""
-    rounds_note = (f"Local checks failed and went back to the agent {live.state['round'] - 1} time(s) before the push.\n\n"
+    digest = retro_digest(retros)
+    rounds_note = (f"<details><summary>Retrospectives ({len(retros)})</summary>\n\n{digest}\n\n</details>\n\n"
+                   if digest else "") + (f"Local checks failed and went back to the agent {live.state['round'] - 1} time(s) before the push.\n\n"
                    if live.state["round"] > 1 else "")
     g.comment(repo, n, f"Agent step `{step}` finished in {duration / 60:.1f} min "
-                       f"({spent}). PR: #{pr['number']}\n\n{rounds_note}{tasks}{summary}\n\n{links}\n"
+                       f"({spent}). PR: #{pr['number']}\n\n{rounds_note}{tasks}"
+                       # folded: an item's page was a wall of review guides; the checkpoint is what to read
+                       f"<details><summary>What the agent says</summary>\n\n{summary}\n\n</details>\n\n{links}\n"
                        f"- [Pull request: every change]({pr['html_url']}/files)")
     lid = g.label_id(repo, f"agent:{step}")
     labels = g.get(f"/repos/{repo}/issues/{n}/labels")

@@ -124,6 +124,29 @@ class NormalizeTests(unittest.TestCase):
         self.assertIs(model_shim.normalize(body), body)
 
 
+class CapOutputTests(unittest.TestCase):
+    """brevkoll#7: one local answer ran 94k tokens (30+ min) until the context was full."""
+
+    def test_a_huge_or_missing_max_tokens_is_capped_and_llama_gets_n_predict(self) -> None:
+        for asked in (64000, None):
+            body = {"messages": [{"role": "user", "content": "hi"}]}
+            if asked:
+                body["max_tokens"] = asked
+            out = model_shim.cap_output(body, 16384)
+            self.assertEqual((out["max_tokens"], out["n_predict"]), (16384, 16384))
+
+    def test_a_smaller_request_is_kept_and_thinking_fits_below_the_cap(self) -> None:
+        out = model_shim.cap_output({"messages": [], "max_tokens": 2000}, 16384)
+        self.assertEqual(out["max_tokens"], 2000)
+        out = model_shim.cap_output({"messages": [], "max_tokens": 32000,
+                                     "thinking": {"type": "enabled", "budget_tokens": 31000}}, 16384)
+        self.assertEqual(out["thinking"]["budget_tokens"], 15360)
+
+    def test_bodies_that_are_not_messages_pass_unchanged(self) -> None:
+        body = {"model": "x"}
+        self.assertIs(model_shim.cap_output(body), body)
+
+
 class FakeUpstream(http.server.BaseHTTPRequestHandler):
     seen: list[dict] = []
 
@@ -174,6 +197,7 @@ class ShimTests(unittest.TestCase):
             self.assertIn(b"message_start", resp.read())
         self.assertEqual(FakeUpstream.seen[0]["key"], "real-key")
         self.assertEqual(FakeUpstream.seen[0]["path"], "/v1/messages")
+        self.assertEqual(FakeUpstream.seen[0]["body"]["n_predict"], model_shim.MAX_OUTPUT_TOKENS)  # capped on the wire
 
     def test_openai_style_calls_pass_through_unchanged(self) -> None:
         # a staged app on the devbox calls /v1/chat/completions through the gateway: its system message must stay put

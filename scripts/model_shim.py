@@ -25,6 +25,7 @@ Config: ~/.config/factory/local-model.env (or the environment), all optional:
   LOCAL_MODEL_ARBITER_URL  GPU arbiter (GET /status, POST /request), for example <front end>/arbiter
   LOCAL_MODEL_WAKE_CMD   command that wakes the model host (for example ops/devbox/wake-desktop.sh)
   LOCAL_MODEL_KEY_FILE   bearer key file                  default ~/.config/llm-agent/api-key
+  LOCAL_MODEL_MAX_OUTPUT_TOKENS  longest single answer (default 16384; stops a model caught in a loop)
   LOCAL_MODEL_TLS_CERT_FILE, LOCAL_MODEL_TLS_KEY_FILE, LOCAL_MODEL_TLS_CA_FILE   client cert, key and CA for mTLS
 Secrets stay in their files; this file only names them.
 
@@ -51,6 +52,10 @@ DEFAULTS = {"LOCAL_MODEL_URL": "http://127.0.0.1:8090", "LOCAL_MODEL_NAME": "qwe
             "LOCAL_MODEL_KEY_FILE": str(Path.home() / ".config" / "llm-agent" / "api-key")}
 HOP = {"host", "content-length", "accept-encoding", "connection", "x-api-key", "authorization", "transfer-encoding"}
 UPSTREAM_TIMEOUT_S = 900
+# One answer of the model may not be longer than this. brevkoll#7 (2026-11-22): a single local answer ran for 30+ min
+# and 94k tokens (a loop in its thinking) until the 131k context was full; nothing upstream stopped it. 16k tokens is
+# about 4 min on the GPU workstation and far more than any real answer of an agent step. LOCAL_MODEL_MAX_OUTPUT_TOKENS.
+MAX_OUTPUT_TOKENS = 16384
 
 
 def load_config(path: Path = CONFIG, env: dict[str, str] | None = None) -> dict[str, str]:
@@ -67,6 +72,21 @@ def load_config(path: Path = CONFIG, env: dict[str, str] | None = None) -> dict[
 
 def _blocks(content: Any) -> list[Any]:
     return [{"type": "text", "text": content}] if isinstance(content, str) else list(content or [])
+
+
+def cap_output(body: dict[str, Any], limit: int = MAX_OUTPUT_TOKENS) -> dict[str, Any]:
+    """Cap the length of one answer: `max_tokens` (and llama.cpp's own `n_predict`, which it honours on every route)
+    at `limit`, and a thinking budget below that, so a model caught in a loop stops after minutes instead of filling
+    the context. A smaller value the client asked for is kept."""
+    if not isinstance(body, dict) or "messages" not in body:
+        return body
+    asked = body.get("max_tokens")
+    cap = min(int(asked), limit) if isinstance(asked, int) and asked > 0 else limit
+    out = {**body, "max_tokens": cap, "n_predict": cap}
+    thinking = body.get("thinking")
+    if isinstance(thinking, dict) and isinstance(thinking.get("budget_tokens"), int):
+        out["thinking"] = {**thinking, "budget_tokens": max(1024, min(thinking["budget_tokens"], cap - 1024))}
+    return out
 
 
 def normalize(body: dict[str, Any]) -> dict[str, Any]:
@@ -236,7 +256,8 @@ def make_handler(cfg: dict[str, str], refresh_s: float = 30) -> type[http.server
             raw = self.rfile.read(int(self.headers.get("content-length") or 0))
             if raw and method == "POST" and self.path.split("?")[0].rstrip("/").endswith("/v1/messages"):
                 try:
-                    raw = json.dumps(normalize(json.loads(raw))).encode()
+                    limit = int(cfg.get("LOCAL_MODEL_MAX_OUTPUT_TOKENS") or MAX_OUTPUT_TOKENS)
+                    raw = json.dumps(cap_output(normalize(json.loads(raw)), limit)).encode()
                 except json.JSONDecodeError:
                     pass  # not JSON: pass it on, the upstream answers with its own error
             conn, prefix = connection(upstream())

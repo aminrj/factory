@@ -169,7 +169,7 @@ class PickUpRetryTests(unittest.TestCase):
         self.assertIn("CHECKPOINT spec-retry", cp)
         self.assertIn("resume=pick_up", cp)
         self.assertIsNotNone(may(dict(cp_from(cp))))  # the night shift may retry it
-        self.g.comment("owner/app", 1, "/go model=fast")
+        self.g.comment("owner/app", 1, "/go model=fast stop=spec")
         self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran pick_up")  # type: ignore[arg-type]
         self.assertEqual(self.steps_run(), ["spec"])
         self.assertIn("CHECKPOINT 1", self.bot())

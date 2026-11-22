@@ -82,6 +82,19 @@ class StartTests(unittest.TestCase):
         self.g.comment("owner/app", 1, f"▶ Picked up `/go` (comment {go['id']}): starting this issue.")
         self.assertIsNone(orchestrate.start_request(self.g, "owner/app", 1))  # type: ignore[arg-type]
 
+    def test_a_plain_go_starts_the_autopilot_after_the_spec(self) -> None:
+        self.g.comment("owner/app", 1, "/go")
+        steps, hops = [], []
+        with mock.patch.object(orchestrate, "adopt", new=ADOPT), \
+             mock.patch.object(orchestrate, "dispatch", side_effect=lambda ctx, step, **k: steps.append(step)), \
+             mock.patch.object(orchestrate, "run_handler", side_effect=lambda g, r, n, ctx, m, h: hops.append(h)), \
+             mock.patch.object(orchestrate, "checkpoint"):
+            self.assertEqual(self.process(), "started")
+        claim = next(c["body"] for c in self.g.comments if c["body"].startswith("▶"))
+        self.assertIn("until a staged build you can try", claim)
+        self.assertEqual((steps, hops), (["spec"], ["after_gate1"]))
+        self.assertIn("Running `after_gate1`", self.g.comments[-1]["body"])
+
     def test_the_factory_s_own_comment_never_starts_anything(self) -> None:
         self.g.comment("owner/app", 1, "ℹ️ /go is how you start this", who="owner")
         self.assertIsNone(orchestrate.start_request(self.g, "owner/app", 1))  # type: ignore[arg-type]
@@ -114,7 +127,7 @@ class RealAdoptTests(unittest.TestCase):
 
     def test_the_start_claims_every_go_and_runs_the_spec_step_on_the_named_model(self) -> None:
         first = self.g.comment("owner/app", 1, "/go model=fast")
-        go = self.g.comment("owner/app", 1, "/go model=fast investigate and fix")
+        go = self.g.comment("owner/app", 1, "/go model=fast stop=spec investigate and fix")
         steps, cps = [], []
         with mock.patch.object(orchestrate, "adopt", new=ADOPT), \
              mock.patch.object(orchestrate, "dispatch", side_effect=lambda ctx, step, **k: steps.append((step, ctx.model, ctx.auto))), \
@@ -125,6 +138,7 @@ class RealAdoptTests(unittest.TestCase):
         self.assertIn(f"(comment {first['id']})", claim)
         self.assertEqual(steps, [("spec", "fast", False)])
         self.assertEqual(cps, ["1"])
+        self.assertIn("until the spec and its acceptance tests", claim)
         self.assertIn("stage/idea", self.g.labels)
         self.assertIsNone(orchestrate.start_request(self.g, "owner/app", 1))  # type: ignore[arg-type]
 

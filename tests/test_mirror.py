@@ -85,6 +85,21 @@ class MirrorGuardTests(unittest.TestCase):
         self.assertEqual(len(mirror.check(self.repo)), 1)
 
 
+    def test_scrub_takes_private_names_out_of_text_for_thoughts(self) -> None:
+        # brevkoll#29: the CI note's PR link landed in thoughts/29/issue.md and blocked the mirror
+        mirror.DENY_FILE.write_text("my-secret-host\n")
+        text = ("Details: https://gitea.lab.example.org/amine/app/pulls/30 and https://example.com/ok\n"
+                "runner at 10.0.40.13, box my-secret-host")
+        out = mirror.scrub(text)
+        self.assertIn("<internal link>", out)
+        self.assertIn("https://example.com/ok", out)
+        self.assertNotIn("lab.example", out)
+        self.assertNotIn("10.0.40.13", out)
+        self.assertNotIn("my-secret-host", out)
+        self.commit("issue.md", out)
+        self.assertEqual(mirror.check(self.repo), [])
+
+
 class SnapshotTests(unittest.TestCase):
     """Push into a real bare repo standing in for GitHub."""
 

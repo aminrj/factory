@@ -115,7 +115,8 @@ class LoopSmokeTests(unittest.TestCase):
             mock.patch.object(orchestrate, "refresh_board"), mock.patch.object(orchestrate, "commit_ops"),
             mock.patch.object(orchestrate, "notify", new=self.notify), mock.patch.object(orchestrate, "log"),
             mock.patch.object(orchestrate, "dispatch", side_effect=lambda ctx, step, note=None: self.dispatched.append(step) or ""),
-            mock.patch.object(orchestrate, "FULL_GATES", True),  # these tests stop at CP2; test_loop_gates covers the default
+            # these tests are about the CP1 approval; what follows it is covered in test_loop_gates
+            mock.patch.object(orchestrate, "through_to_plan", side_effect=lambda ctx: ctx.comment("🛑 CHECKPOINT 3: plan")),
         ]
         for p in patches:
             p.start()
@@ -144,7 +145,7 @@ class LoopSmokeTests(unittest.TestCase):
         self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran after_gate1")  # type: ignore[arg-type]
         self.assertEqual(self.dispatched, ["threat-model"])
         self.assertIn("stage/spec-ready", self.g.labels)
-        self.assertIn("CHECKPOINT 2", self.last_bot_text())
+        self.assertIn("CHECKPOINT 3", self.last_bot_text())
         git(self.clone, "fetch", "-q", "origin")
         self.assertIn("Status: approved", git(self.clone, "show", "origin/agent/issue-1:thoughts/1/spec.md"))
         body = git(self.clone, "log", "-1", "--format=%an|%B", "origin/agent/issue-1", "--", "thoughts/1/spec.md")

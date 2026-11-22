@@ -51,6 +51,24 @@ class LiveTests(unittest.TestCase):
             self.assertEqual(json.loads((board / "index.json").read_text())["items"], [])
             self.assertIn("edits src/app/upload.py", (board / "app-29.last.log").read_text())
 
+    def test_the_board_shows_what_commands_returned_and_what_the_model_thinks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            live = Live(Path(tmp), "app", 1, "implement", "local")
+            live.event({"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": "The limit counts the multipart overhead, so " + "x" * 2000},
+                {"type": "tool_use", "name": "Bash", "input": {"command": "uv run pytest -q tests/unit"}}]}})
+            out = "\n".join(f"line {i}" for i in range(20))
+            live.event({"type": "user", "message": {"content": [
+                {"type": "tool_result", "content": [{"type": "text", "text": out}]}]}})
+            recent = "\n".join(live.state["recent"])
+            self.assertIn("💭 (", recent)
+            self.assertIn("multipart overhead", recent)
+            self.assertIn("→ runs `uv run pytest -q tests/unit`", recent)
+            self.assertIn("← line 0", recent)
+            self.assertIn("… 14 more lines", recent)  # the board shows 6; the log keeps all 20
+            live.close()
+            self.assertIn("line 19", (Path(tmp) / "state/board/live/app-1.last.log").read_text())
+
     def test_paths_are_shown_relative_to_the_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             live = Live(Path(tmp), "app", 1, "implement", "local", Path("/w/app-issue-1"))
@@ -76,6 +94,19 @@ class RunAgentTests(unittest.TestCase):
             self.assertEqual(res["session_id"], "s1")
             self.assertFalse(res["is_error"])
             self.assertEqual(live.state["files"], ["src/app/upload.py"])
+
+    def test_a_run_that_hits_the_turn_limit_is_a_stall_with_a_hint(self) -> None:
+        # what Claude Code 2.1.330 sends when --max-turns is reached (seen on the devbox, 2026-11-22)
+        last = {"type": "result", "subtype": "error_max_turns", "is_error": True, "num_turns": 81, "result": None}
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "claude"
+            fake.write_text(f"#!/bin/sh\ncat >/dev/null\necho '{json.dumps(last)}'\n")
+            fake.chmod(0o755)
+            live = Live(Path(tmp), "app", 1, "implement", "local")
+            res = dispatch.run_agent([str(fake)], "", Path(tmp), dict(os.environ), live, time.time() + 30)
+        self.assertTrue(res["is_error"])
+        self.assertEqual(dispatch.classify(res["result"]), "stalled")
+        self.assertIn("/go model=fast", dispatch.HINTS["stalled"])
 
     def test_a_run_that_hangs_is_killed_at_the_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

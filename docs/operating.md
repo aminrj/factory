@@ -6,9 +6,13 @@ One page for everything you do or see while the factory runs. The path of an app
 
 ## Starting work
 
-Write the issue (a bug, a feature, a question), then comment **`/go`** under it. That is all. An agent reads the issue
-and your comments, drafts the spec and the acceptance tests, and Checkpoint 1 waits for you. `/go model=fast` does the
-same on Claude. Any time of day; no labels needed. (A `/go` older than 24 hours on an issue that never started is
+Write the issue (a bug, a feature, a question), then comment **`/go`** under it. That is all. The **autopilot** takes it
+from there: spec and acceptance tests, threat model, research, plan, build, checks, staging, one step after the other,
+until **Checkpoint 4: a staged build you can try**, with links to every document it wrote and a list of what it decided
+for you (provisional threat-model rows, deferred questions). Each step leaves a one-line `▶ Autopilot:` comment, so the
+issue shows where it is. It stops earlier only when the plan touches risky files (`deploy/`, `.gitea/`, a Dockerfile,
+the guard scripts, the acceptance tests), when a step fails, or where you asked: `/go stop=spec` (pause after the spec,
+the old Checkpoint 1) or `/go stop=plan` (pause at the plan). `/go model=fast` does the same on Claude. Any time of day; no labels needed. (A `/go` older than 24 hours on an issue that never started is
 treated as history, not as a request.)
 
 For tonight instead of now: put the label `night/ok` on the issue (see below).
@@ -20,9 +24,10 @@ nothing can happen, the factory says why.
 
 | Command | Where | Effect |
 |---|---|---|
-| `/go` | an issue not started yet | start it: spec and acceptance tests are drafted, then Checkpoint 1 |
-| `/go` | CP1, CP3 (and CP2, 2b with `FACTORY_FULL_GATES=on`) | **approve** what is shown and continue. The factory records your approval in the file (`Status: approved`, or the remaining `PROPOSED` rows become `ACCEPTED`) in a commit that names your comment. To change something first, edit the file, then `/go` |
-| `/go` | any other checkpoint | continue; runs on the **local model**, records the gate's typical minutes |
+| `/go` | an issue not started yet | start it; the autopilot runs to Checkpoint 4 (a staged build) |
+| `/go stop=spec\|plan` | an issue not started yet, or any checkpoint | the same, but pause at the spec (CP1) or at the plan (CP3) |
+| `/go` | CP1, CP3 (and CP2, 2b on items that were already waiting there) | **approve** what is shown and continue. The factory records your approval in the file (`Status: approved`, or the remaining `PROPOSED` rows become `ACCEPTED`) in a commit that names your comment. To change something first, edit the file, then `/go` |
+| `/go` | any other checkpoint | continue (on the autopilot, up to Checkpoint 4); runs on the **local model**, records the gate's typical minutes |
 | `/go model=smart\|fast\|cheap` | any checkpoint | the same step on Claude (Opus, Sonnet, Haiku): spends cloud tokens |
 | `/go minutes=N` | any checkpoint | record your real time on the gate instead of the default |
 | `/rework <what is wrong>` | CP3 plan, CP4 review, CP5 release | send it back with a note |
@@ -69,27 +74,42 @@ on another item runs in parallel with a local step.
 - **From the spec to the plan in one stop.** After your `/go` at CP1 the agents draft the threat model, research and
   the plan back to back; CP3 shows all three. Threat-model rows are accepted provisionally (edit a row before `/go` to
   decide it differently); research questions are listed and deferred unless you answer and `/rework`.
-  `FACTORY_FULL_GATES=on` brings back the separate CP2 and 2b stops.
 - **The agent checks its own work before anything is pushed.** After an implement or validate run the factory runs the
   app's checks locally (`.factory/checks` in the app repo, one command per line; otherwise what its CI runs: ruff,
   pyright, pytest, the holdout tests, `scripts/check-tests-fail-before-patch.sh`, `scripts/quality.sh`). A check that
-  fails goes back to **the same agent session** at once, up to 2 rounds (`FACTORY_SELF_FIX_ROUNDS`). A check that was
+  fails goes back to **the same agent session** at once, up to 2 rounds. A check that was
   already red before the run is reported, not handed to the agent. CI then confirms instead of debugging: a phase
-  whose checks passed locally starts the next phase at once, and the foreman waits for CI only after the last phase
-  (`FACTORY_CI_EACH_PHASE=on` waits after every phase, as before).
-- **The spec step cleans up after itself.** Files outside `thoughts/N/` and `tests/holdout/` are put back, stray NUL
-  bytes are removed, and the acceptance tests must load before Checkpoint 1 is posted.
+  whose checks passed locally starts the next phase at once, and the foreman waits for CI only after the last phase.
+- **Retrospectives.** Every 25 turns (40 on Claude) a run pauses and the agent writes five lines: goal, done, stuck,
+  next, files. The factory checks them against the worktree (commits, changed files, files no agent may touch) and
+  answers: continue, with the facts; undo a change to a protected file now (instead of a refusal after the run); or,
+  after two pauses in a row with no change at all, stop as `stalled`. A local run also stops at 80 turns. The notes are
+  on the board and folded into the step's comment.
+- **A failed local step goes to Claude once, by itself.** When a local step fails (stalled, refused by a guard, tests
+  that do not load), the foreman runs the same step on `fast` and says so in a comment, with what the local run reported.
+  At most 3 switches per item and only while the item's cloud spend is under $5. Never at night, and never for a
+  problem the cloud does not fix (credit, login, model down). Then the next step is local again.
+- **One answer is at most 16k tokens on the local model.** A model caught in a loop used to write for half an hour
+  until its context was full (brevkoll#7); the model shim now cuts one answer at 16k tokens (about 4 minutes).
+- **The spec step cleans up after itself.** Files outside `thoughts/N/` and `tests/holdout/` are put back, and the
+  acceptance tests must load before Checkpoint 1 is posted (otherwise the draft is written again).
+- **Staged builds are checked.** The review link names the machine that runs the build, and the factory checks that
+  its container runs exactly that build before posting the link. A `localhost` link appears only where the staging
+  machine is also where you browse (`STAGING_LOCAL_LINK=on` in its `staging.env`).
+- **Nothing private reaches a mirrored file.** Comments, CI notes and job logs copied into `thoughts/N/issue.md` have
+  internal links and host names replaced (`<internal link>`), so a merged item can always be mirrored.
 
 ## Where to look
 
 - **Working now** (top of the board): each running agent's step, model, minutes, turns, what it is doing this second,
-  its task list, the files it touched, its recent output and a link to the full log. Refreshed every 4 seconds; panels
+  its task list, the files it touched, the last 80 entries of its output (what it thinks, every command with the first lines of what it returned, its messages) and a link to the full log. Refreshed every 4 seconds; panels
   you open or close stay that way. **dock ⇥** keeps it beside the board on a wide screen and as a bottom sheet on a
   phone (remembered per device; a bookmark ending in `#dock` always docks).
 
 - **The board** (the devbox, port 8801): a kanban with the columns Your turn, Review, Blocked, Agent working, Inbox, Done
   and Archived; a filter bar; the commands waiting and why; the failures by kind; 7-day numbers; what the checkpoints
-  mean. Done cards can be archived on your device.
+  mean. Done cards can be archived on your device. The tile **agent time wasted** counts the minutes of runs that failed
+  or that a guard refused after they finished, against all agent minutes of the week: the number that should fall.
 - **The Factory status issue**: the same facts as text, rewritten every minute; also where `/llm` goes.
 - **Pushes** (ntfy): checkpoints, failures, a takeover by the standby, the morning summary of the night. Night
   checkpoints are silent.

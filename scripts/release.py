@@ -144,7 +144,7 @@ def candidate(g: Gitea, app: str, now: datetime | None = None) -> dict:
     DATA.mkdir(exist_ok=True)
     with (DATA / "releases.jsonl").open("a") as fh:
         fh.write(json.dumps(record) + "\n")
-    return {**record, "image": refs[0], "url": staged["url"], "local_url": staged["local_url"], "previous": previous,
+    return {**record, "image": refs[0], "url": staged["url"], "local_url": staged.get("local_url", ""), "previous": previous,
             "changes": changes.splitlines(), "sbom": str(sbom)}
 
 

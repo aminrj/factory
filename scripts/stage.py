@@ -18,7 +18,8 @@ Rules (the human only clicks the link):
   - The model comes from ~/.config/factory/staging.env (bring your own model: any OpenAI-compatible endpoint;
     LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL, optional LLM_API_KEY and LLM_TLS_*_FILE). Keys starting with STAGING_ are
     for this script and are not passed on: STAGING_HOST (name shown in the link; default: the tailnet IP), STAGING_BIND_IP
-    (the address the staged build listens on; default: the tailnet IP). On the devbox VM, which has no Tailscale of its own
+    (the address the staged build listens on; default: the tailnet IP), STAGING_LOCAL_LINK=on (offer the
+    localhost twin's link: only where the owner's browser runs on the staging machine itself). On the devbox VM, which has no Tailscale of its own
     and is reached through the tailnet's subnet router, STAGING_BIND_IP is its LAB address.
     ~/.config/factory/apps/<app>.env adds app-specific settings. Both files are mode 0600 and never tracked.
     Do not copy a secret into them: `LLM_API_KEY_FILE=<path>` makes stage.py read the key from its source file.
@@ -38,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -255,6 +257,10 @@ def up(app: str, issue: int | None = None, ref: str | None = None, image: str | 
         raise StageError(f"No model configured: put LLM_PROVIDER, LLM_BASE_URL, LLM_MODEL in {CONF / 'staging.env'}")
     ip = bind_ip(model)
     host_name = model.pop("STAGING_HOST", "") or ip
+    # The localhost twin is only for a browser on the staging machine itself (the Windows side of the GPU workstation).
+    # Elsewhere a "localhost" link opens whatever runs on the reader's own PC: on 2026-11-22 the owner tested brevkoll#29
+    # through it and got a 14-hour-old build left on the workstation, not the devbox build the comment named.
+    local_link = model.pop("STAGING_LOCAL_LINK", "").lower() in ("1", "on", "yes", "true")
     model = {k: v for k, v in model.items() if not k.startswith("STAGING_")}
     model_status = preflight_model(model)
 
@@ -277,9 +283,13 @@ def up(app: str, issue: int | None = None, ref: str | None = None, image: str | 
         sh(*twin_args(app, image, port, envf.name, host_net))
     wait_healthy(f"http://{ip}:{port}/healthz")
     wait_healthy(f"http://{LOOPBACK}:{port}/healthz")
+    running = sh("docker", "inspect", "--format", "{{.Config.Image}}", name, check=False)
+    if running != image:  # never hand out a link to a build other than the one named
+        raise StageError(f"{name} runs {running or 'nothing'}, not {image}")
 
     info = {"app": app, "issue": issue, "ref": label, "image": image, "model": model_status, "sha": sha, "port": port, "network": "host" if host_net else "bridge",
-            "ip": ip, "url": f"http://{host_name}:{port}/", "local_url": f"http://localhost:{port}/", "started": datetime.now(UTC).isoformat(timespec="seconds")}
+            "ip": ip, "url": f"http://{host_name}:{port}/", "local_url": f"http://localhost:{port}/" if local_link else "",
+            "host": socket.gethostname(), "started": datetime.now(UTC).isoformat(timespec="seconds")}
     reg[app] = info
     save_registry(reg)
     return info

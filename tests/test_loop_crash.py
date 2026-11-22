@@ -8,7 +8,6 @@ import fcntl
 import gc
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import test_loop_gates as gates
 from test_loop_gates import PLAN

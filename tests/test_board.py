@@ -125,6 +125,22 @@ class BoardV2Tests(unittest.TestCase):
         self.assertIn("id='q'", page)  # the filter
 
 
+class WasteTests(unittest.TestCase):
+    def test_failed_and_refused_minutes_are_counted_as_wasted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "agent_runs.jsonl").write_text("\n".join(json.dumps(x) for x in [
+                {"ts": "2026-11-22T10:00:00Z", "step": "implement", "duration_s": 600, "is_error": True},
+                {"ts": "2026-11-22T10:20:00Z", "step": "implement", "duration_s": 1200},  # pushed, then refused
+                {"ts": "2026-11-22T11:00:00Z", "step": "plan", "duration_s": 60}]) + "\n")
+            (d / "refusals.jsonl").write_text(json.dumps({"ts": "2026-11-22T10:20:00Z", "duration_s": 1200}) + "\n")
+            s = board.analytics(d, NOW)
+            page = board.render([], [], s, [], NOW, "host")
+        self.assertEqual((round(s["wasted_min"]), round(s["agent_min"]), s["refused_7d"]), (30, 31, 1))
+        self.assertIn("30 of 31 min", page)
+        self.assertIn("agent time wasted", page)
+
+
 class CostTests(unittest.TestCase):
     def test_local_runs_cost_nothing_whatever_claude_code_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

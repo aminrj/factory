@@ -47,6 +47,21 @@ def rules() -> dict[str, re.Pattern[str]]:
     return out
 
 
+URL = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s)>\]\"'`]+", re.I)
+
+
+def scrub(text: str) -> str:
+    """Text the factory writes into a mirrored repo (thoughts/N/issue.md: the owner's comments, CI notes, job logs) with
+    every private name taken out: a link that names one becomes `<internal link>`, any other hit `<internal name>`.
+    brevkoll#29 (2026-11-22): the foreman's own CI note put the PR's internal URL into thoughts/29/issue.md, and the
+    mirror refused `main` after the merge."""
+    pats = list(rules().values())
+    text = URL.sub(lambda m: "<internal link>" if any(p.search(m.group(0)) for p in pats) else m.group(0), text)
+    for p in pats:
+        text = p.sub("<internal name>", text)
+    return text
+
+
 def git(repo: Path, *args: str, check: bool = True) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=check, capture_output=True, text=True).stdout
 

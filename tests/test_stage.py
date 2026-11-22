@@ -151,5 +151,36 @@ class StageTests(unittest.TestCase):
         self.assertEqual(out, {"LLM_BASE_URL": "http://x", "STAGING_HOST": "h"})
 
 
+class UpTests(unittest.TestCase):
+    """stage.up with Docker faked: the link it hands out is for the build it names, and only there."""
+
+    def up(self, env: dict[str, str], running: str) -> dict:
+        def sh(*args: str, **kw: object) -> str:
+            if args[:2] == ("docker", "inspect"):
+                return running
+            return "present" if args[:2] == ("docker", "images") else ""
+        with mock.patch.object(stage, "Gitea"), \
+                mock.patch.object(stage, "resolve_target", return_value=("abcdef1234567", "agent/issue-1")), \
+                mock.patch.object(stage, "require_green"), \
+                mock.patch.object(stage, "load_model_env", return_value=dict(env)), \
+                mock.patch.object(stage, "bind_ip", return_value="10.9.9.9"), \
+                mock.patch.object(stage, "preflight_model", return_value="ok"), \
+                mock.patch.object(stage, "load_registry", return_value={}), \
+                mock.patch.object(stage, "save_registry"), \
+                mock.patch.object(stage, "wait_healthy"), \
+                mock.patch.object(stage, "sh", side_effect=sh):
+            return stage.up("app", 1)
+
+    def test_no_localhost_link_unless_asked_for(self) -> None:
+        info = self.up({"LLM_BASE_URL": "http://m"}, "app-stage:abcdef1")
+        self.assertEqual(info["local_url"], "")
+        info = self.up({"LLM_BASE_URL": "http://m", "STAGING_LOCAL_LINK": "on"}, "app-stage:abcdef1")
+        self.assertTrue(info["local_url"].startswith("http://localhost:"))
+
+    def test_refuses_when_the_container_runs_another_build(self) -> None:
+        with self.assertRaisesRegex(stage.StageError, "not app-stage:abcdef1"):
+            self.up({"LLM_BASE_URL": "http://m"}, "app-stage:0a6bfbd")
+
+
 if __name__ == "__main__":
     unittest.main()

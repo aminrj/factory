@@ -14,7 +14,7 @@ is your `/go` on that issue. Edit a file first only when you want something diff
 | **3** plan | `thoughts/N/plan.md`, with the threat model (rows accepted provisionally) and the research questions | build this plan (`/rework <note>` to change it; edit a threat-model row first to decide it differently) | The build: one agent run per phase, local checks and self-fix, CI, then validation and staging |
 | **4** review | the pull request, all checks green, the staged build to try on the phone | (merge it yourself first) the merge is done | Push to the GitHub mirror, remove the staged build |
 
-With `FACTORY_FULL_GATES=on` two more stops come back between CP1 and CP3:
+Items that were already waiting at one of the old stops between CP1 and CP3 finish through them:
 
 | CP | What waits for you | What `/go` means |
 |---|---|---|

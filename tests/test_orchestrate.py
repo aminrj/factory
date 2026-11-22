@@ -150,6 +150,19 @@ class ReworkAndStagingTests(unittest.TestCase):
         self.assertIn("hangs", text)  # says why, so nobody tries the tailnet link on the PC
         self.assertNotIn("devbox", text)
 
+    def test_staging_block_without_a_local_link_names_the_host_and_no_localhost(self) -> None:
+        # 2026-11-22: a localhost link sent the owner to a stale build on another machine
+        ctx = FakeCtx()
+        ctx.branch = "agent/issue-1"  # type: ignore[attr-defined]
+        ctx.branch_file = lambda name: "- [ ] x"  # type: ignore[method-assign]
+        info = '{"url": "http://box.example.com:8800/", "ip": "100.64.0.9", "port": 8800, "sha": "abcdef123456", "local_url": "", "host": "box"}'
+        out = mock.Mock(returncode=0, stdout=info, stderr="")
+        with mock.patch.object(orchestrate, "stage_call", return_value=out):
+            text = orchestrate.staging_block(ctx)  # type: ignore[arg-type]
+        self.assertNotIn("localhost", text)
+        self.assertIn("`box`", text)
+        self.assertNotIn("GPU workstation", text)
+
     def test_staging_failure_does_not_stop_the_checkpoint(self) -> None:
         ctx = FakeCtx()
         out = mock.Mock(returncode=1, stdout="", stderr="STAGING FAILED: no model configured")

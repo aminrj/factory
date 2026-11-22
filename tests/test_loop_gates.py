@@ -150,12 +150,12 @@ class GateTests(unittest.TestCase):
         self.assertIn("CHECKPOINT 2b", self.bot())
         self.assertIn("Is X in scope?", self.bot())
 
-    def test_cp1_go_runs_threat_model_research_and_plan_and_stops_once_at_cp3(self) -> None:
+    def test_cp1_go_stop_plan_runs_threat_model_research_and_plan_and_stops_once_at_cp3(self) -> None:
         self.commit_file("spec.md", "# Spec\n\nStatus: draft\n")
         self.checkpoint("after_gate1", "1")
         self.agent_files.update({"threat-model": "| R1 | PROPOSED |\n| R2 | PROPOSED |\n",
                                  "research": "# R\n\n## Open questions for the human\n\n- Is X in scope?\n", "plan": PLAN})
-        self.assertEqual(self.go(), "ran after_gate1")
+        self.assertEqual(self.go("/go stop=plan minutes=2"), "ran after_gate1")
         self.assertEqual(self.steps(), ["threat-model", "research", "plan"])
         text = self.bot()
         self.assertIn("CHECKPOINT 3", text)
@@ -164,6 +164,38 @@ class GateTests(unittest.TestCase):
         tm = git(self.clone, "show", "origin/agent/issue-1:thoughts/1/threat-model.md")
         self.assertNotIn("PROPOSED", tm)
         self.assertEqual(sum(1 for c in self.g.comments if c["body"].startswith("🛑")), 2)  # CP1 (fixture) and CP3
+
+    # -- the autopilot: one /go runs to the staged build (2026-11-22)
+    def test_one_go_runs_from_the_spec_to_a_staged_build_at_cp4(self) -> None:
+        self.commit_file("spec.md", "# Spec\n\nStatus: draft\n")
+        self.checkpoint("after_gate1", "1")
+        self.agent_files.update({"threat-model": "| R1 | PROPOSED |\n",
+                                 "research": "# R\n\n## Open questions for the human\n\n- Is X in scope?\n", "plan": PLAN})
+        self.assertEqual(self.go("/go"), "ran after_gate1")
+        self.assertEqual(self.steps(), ["threat-model", "research", "plan", "implement", "implement", "validate"])
+        cps = [c["body"] for c in self.g.comments if c["body"].startswith("🛑")]
+        self.assertEqual(len(cps), 2)  # CP1 (fixture) and CP4: nothing in between waited for the owner
+        self.assertIn("CHECKPOINT 4", cps[-1])
+        self.assertIn("What the autopilot decided for you", cps[-1])
+        self.assertIn("Is X in scope?", cps[-1])  # deferred questions are shown, not lost
+        self.assertIn("Open the staged build", cps[-1])
+        hops = [c["body"] for c in self.g.comments if c["body"].startswith("▶ Autopilot:")]
+        self.assertTrue(any("Running `after_gate3`" in h for h in hops))  # a crash in between is recoverable
+        plan = git(self.clone, "log", "-1", "--format=%B", "origin/agent/issue-1", "--", "thoughts/1/plan.md")
+        self.assertIn("Approved-by-owner: comment ", plan)  # still one approval commit naming the owner's /go
+        notified = [c.args[0] for c in self.notify.call_args_list]
+        self.assertFalse(any("checkpoint 3" in t for t in notified))  # no push for a gate nobody has to answer
+
+    def test_the_autopilot_stops_at_cp3_for_a_plan_that_touches_risky_files(self) -> None:
+        self.commit_file("spec.md", "# Spec\n\nStatus: draft\n")
+        self.checkpoint("after_gate1", "1")
+        self.agent_files.update({"threat-model": "| R1 | PROPOSED |\n", "research": "# R\n",
+                                 "plan": PLAN + "\nChange `.gitea/workflows/ci.yml` and `deploy/base`.\n"})
+        self.assertEqual(self.go("/go"), "ran after_gate1")
+        self.assertEqual(self.steps(), ["threat-model", "research", "plan"])
+        self.assertIn("CHECKPOINT 3", self.bot())
+        self.assertIn("autopilot stopped here", self.bot())
+        self.assertIn("`.gitea/`", self.bot())
 
     def test_the_latest_command_wins_and_covers_the_earlier_one(self) -> None:
         # brevkoll#29: a queued `/go` ran on the local model although the owner then sent `/go model=fast`

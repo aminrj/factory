@@ -142,6 +142,12 @@ def analytics(data: Path, now: datetime) -> dict[str, Any]:
     local = count_model.get("local", 0)
     local_runs = [r for r in recent if r.get("model") == "local"]
     failed = [r for r in recent if r.get("is_error")]
+    # Agent minutes that bought nothing: runs that failed, and runs a guard refused after they finished (dispatch.py
+    # writes refusals.jsonl). The number to watch: it should fall as the factory gets better at its own work.
+    refused = [r for r in rows("refusals") if str(r.get("ts", "")) >= week[:19]]
+    total_min = sum(float(r.get("duration_s") or 0) for r in recent) / 60
+    wasted_min = (sum(float(r.get("duration_s") or 0) for r in failed)
+                  + sum(float(r.get("duration_s") or 0) for r in refused)) / 60
     classes: dict[str, int] = defaultdict(int)
     for r in failed:
         classes[str(r.get("class") or "unknown (recorded before classes)")] += 1
@@ -153,6 +159,7 @@ def analytics(data: Path, now: datetime) -> dict[str, Any]:
         "local_fast_equiv": sum(float(r.get("cost_usd") or 0) for r in local_runs if r.get("cost_basis") == "fast-equivalent"),
         "local_kwh": sum(float(r.get("energy_kwh") or 0) for r in local_runs),
         "kwh_price": os.environ.get("FACTORY_KWH_PRICE", ""),
+        "wasted_min": wasted_min, "agent_min": total_min, "refused_7d": len(refused),
         "runs_7d": len(recent), "cost_7d": sum(by_model.values()), "errors_7d": sum(1 for r in recent if r.get("is_error")),
         "local_share": (local / len(recent)) if recent else 0.0,
         "by_model": sorted(((m, count_model[m], c) for m, c in by_model.items()), key=lambda x: -x[1]),
@@ -179,7 +186,7 @@ CSS = """
 .lcard{border-top:1px solid var(--line);padding:8px 0}.lcard .k{font-size:13px}
 .lcard .act{font-weight:600;margin:.3em 0}.lcard ul.todo{margin:.3em 0;padding-left:1.1em;list-style:none}
 .lcard ul.todo li{margin:.1em 0}.lcard .files{font-size:.85em;opacity:.85;word-break:break-all}
-.lcard pre{white-space:pre-wrap;font-size:.8em;max-height:18em;overflow:auto}
+.lcard pre{white-space:pre-wrap;font-size:.78em;line-height:1.35;max-height:60vh;overflow:auto}
 @media (min-width:900px){body.docked{padding-right:416px}
 body.docked #live{position:fixed;top:0;right:0;bottom:0;width:400px;margin:0;border-radius:0;border-width:0 0 0 1px;
 overflow:auto;z-index:5}body.docked #live pre{max-height:none}}
@@ -264,7 +271,7 @@ return "<div class='lcard'><div class='k'><b>"+e(it.app)+'#'+e(it.n)+'</b> · '+
 ' · '+mins(it.started)+' · turn '+e(it.turns)+(it.round>1?' · self-fix round '+(it.round-1):'')+'</div>'+
 "<div class='act'>"+e(it.action)+'</div>'+(todos?'<ul class=todo>'+todos+'</ul>':"<div class='files'>no task list yet</div>")+
 (files?"<div class='files'>files: "+files+'</div>':'')+
-"<details data-k='live-out-"+k+"'><summary>recent output</summary><pre data-k='"+k+"'>"+
+"<details data-k='live-out-"+k+"'><summary>output (last "+(it.recent||[]).length+" entries)</summary><pre data-k='"+k+"'>"+
 e((it.recent||[]).join('\\n'))+"</pre><a href='live/"+k+".log' target='_blank'>full log</a></details></div>"}).join('')
 :"<div class='empty'>No agent is running. <a href='live/' target='_blank'>last logs</a></div>";
 keep(body);
@@ -395,6 +402,9 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
                if stats["kwh_price"] else "") + "</small></div>",
             f"<div class='tile'><a href='#failures'><div class='v {'bad' if stats['errors_7d'] else ''}'>{stats['errors_7d']}</div>"
             "<small>failed steps ↓</small></a></div>",
+            f"<div class='tile'><div class='v {'bad' if stats['wasted_min'] > 0.25 * max(stats['agent_min'], 1) else ''}'>"
+            f"{stats['wasted_min']:.0f} of {stats['agent_min']:.0f} min</div><small>agent time wasted (failed or refused "
+            f"runs, {stats['refused_7d']} refused)</small></div>",
             f"<div class='tile'><div class='v'>{hm.get('typed', 0) + hm.get('default', 0)} min</div><small>your gate time "
             f"({hm.get('typed', 0)} typed, {hm.get('default', 0)} default, {hm.get('auto', 0)} auto)</small></div></div></section>"]
     out.append("<section id='failures'><details" + (" open" if stats["failures"] else "") + "><summary>Failures (7 days): "

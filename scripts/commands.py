@@ -24,15 +24,21 @@ DEFAULT_MODEL = os.environ.get("FACTORY_DEFAULT_MODEL", "local")
 # The owner's own time on a gate (reading, trying, deciding), in minutes. Typing `minutes=N` records N; without it the
 # gate's typical time below is recorded and marked `default`, so the metrics can tell measured time from a guess.
 GATE_MINUTES: dict[str, int] = {"spec": 10, "threat_model": 5, "plan_review": 10, "code_review": 15, "rework": 5, "release": 10}
-OPTIONS: dict[str, str] = {"minutes": "N (your own time on this gate, optional)", "model": "|".join(MODELS)}
+# Where a `/go` that starts an issue stops. Default: nowhere before Checkpoint 4 (the autopilot: spec, threat model,
+# research, plan, build, checks and staging run back to back; a plan that touches risky files still stops at CP3).
+STOPS = ("spec", "plan")
+OPTIONS: dict[str, str] = {"minutes": "N (your own time on this gate, optional)", "model": "|".join(MODELS),
+                           "stop": "|".join(STOPS) + " (pause there for your review instead of running to the staged build)"}
 OPTION = re.compile(r"^([A-Za-z_][\w-]*)=(\S*)$")
-USAGE = "`/go [model=" + "|".join(MODELS) + "] [minutes=N]` (default: local model), `/stop`, `/rework [model=...] <what is wrong>`"
+USAGE = ("`/go [model=" + "|".join(MODELS) + "] [stop=" + "|".join(STOPS) + "] [minutes=N]` (default: local model, runs to "
+         "the staged build), `/stop`, `/rework [model=...] <what is wrong>`")
 
 
 @dataclass
 class Parsed:
     minutes: int | None = None
     model: str | None = None
+    stop: str | None = None
     errors: list[str] = field(default_factory=list)
 
 
@@ -49,6 +55,11 @@ def _apply(p: Parsed, key: str, value: str) -> None:
             p.model = value.lower()
         else:
             p.errors.append(f"`model={value}` is not a profile I know, use one of: " + ", ".join(f"`{m}`" for m in MODELS))
+    elif k == "stop":
+        if value.lower() in STOPS:
+            p.stop = value.lower()
+        else:
+            p.errors.append(f"`stop={value}` is not a place I can stop, use one of: " + ", ".join(f"`{x}`" for x in STOPS))
     else:
         p.errors.append(f"`{key}=` is not an option I know, the options are: "
                         + ", ".join(f"`{name}={v}`" for name, v in OPTIONS.items()))
