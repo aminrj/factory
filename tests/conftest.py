@@ -22,3 +22,4 @@ def single_host(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FACTORY_LEASE", "off")
     monkeypatch.setenv("FACTORY_NIGHT", "off")  # the night shift would act on its own at night; tests turn it on
     monkeypatch.setenv("FACTORY_LANES", "off")  # steps run inside the tick unless a test starts lanes itself
+    monkeypatch.setenv("FACTORY_RELEASES", "off")  # release.py builds and pushes images: tests mock it

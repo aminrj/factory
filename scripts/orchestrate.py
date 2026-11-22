@@ -56,7 +56,7 @@ CLAIM_PREFIX = "▶"
 MARKER = re.compile(r"<!--factory:(.*?)-->", re.DOTALL)
 ORCH = {"GIT_AUTHOR_NAME": "factory-orchestrator", "GIT_AUTHOR_EMAIL": "factory-orchestrator@users.noreply.local",
         "GIT_COMMITTER_NAME": "factory-orchestrator", "GIT_COMMITTER_EMAIL": "factory-orchestrator@users.noreply.local"}
-GATES = ["spec", "threat_model", "plan_review", "code_review", "rework"]
+GATES = ["spec", "threat_model", "plan_review", "code_review", "rework"]  # the PR minutes table; "release" is recorded too
 TIMEBOX_H = float(os.environ.get("FACTORY_TIMEBOX_HOURS", "8"))
 DISPATCH_TIMEOUT = 3300
 CI_TIMEOUT = 1800
@@ -797,6 +797,8 @@ def after_gate4(ctx: Ctx) -> None:
         raise NeedsHuman(f"{e}\n\nMerged on Gitea, but `main` was NOT pushed to the GitHub mirror. Fix the names in a "
                          "new PR, then reply `/go` again.") from e
     log(f"{ctx.app}#{ctx.n}: merged PR #{pr['number']}, pushed main to github")
+    if os.environ.get("FACTORY_RELEASES", "on") != "off":
+        return release_candidate(ctx)
     checkpoint(ctx, "4b", "merged and mirrored; the release is not automated yet",
                f"PR #{pr['number']} is merged and `main` is on the GitHub mirror. The release steps (tag, image build, "
                f"trivy scan, registry push, deploy guide) are not in the foreman yet ({RELEASE_ISSUE}). To release now, "
@@ -806,6 +808,51 @@ def after_gate4(ctx: Ctx) -> None:
 
 
 RELEASE_ISSUE = "factory#27"
+
+
+def release_call(*args: str) -> str:
+    res = subprocess.run([sys.executable, "-I", str(HQ / "scripts" / "release.py"), *args], capture_output=True,
+                         text=True, env={**os.environ, "WORK": str(WORK)}, timeout=1800)
+    if res.returncode != 0:
+        raise NeedsHuman((res.stderr or res.stdout).strip()[-1200:] or "release.py failed")
+    return res.stdout
+
+
+def release_candidate(ctx: Ctx) -> None:
+    """Stage 6 and 7 (docs/lifecycle.md): build, scan and push the image of main, run that image on the devbox, and ask
+    the owner to accept it at Checkpoint 5. A refused candidate (red main, fixable findings) says why and can be retried."""
+    check_stop(ctx)
+    try:
+        rc = json.loads(release_call("candidate", ctx.app))
+    except NeedsHuman as e:
+        checkpoint(ctx, "5-fix", "no release candidate",
+                   f"{e}\n\nFix it with a new change, then reply `/go` to build the candidate again, or `/stop`.",
+                   "release_candidate")
+        return
+    f = rc["findings"]
+    changes = "\n".join(f"- {c}" for c in rc["changes"][:15]) or "- (first release)"
+    checkpoint(ctx, "5", f"try release candidate {rc['version']}, then accept it",
+               f"The image of `main` ({rc['sha'][:7]}) is built, scanned and in the registry. **This exact image** runs on "
+               f"the devbox now:\n\n**[Open the candidate]({rc['url']})** (on this PC: [{rc['local_url']}]"
+               f"({rc['local_url']}))\n\n- version `{rc['version']}`, digest `{rc['digest'][:19]}…`\n- scan: "
+               f"{f['fixed']} fixable and {f['unfixed']} unfixed HIGH/CRITICAL findings ({f['critical']} critical)\n\n"
+               f"Changes since {rc['previous'] or 'the start'}:\n{changes}\n\n---\nReply `/go` to accept "
+               f"`{rc['version']}`: the commit is tagged and the deploy to Kubernetes follows (a GitOps pull request for "
+               "you to merge). `/rework <what is wrong>` sends it back as a change.",
+               "after_release", rework=True, extra=f"version={rc['version']};sha={rc['sha']}")
+
+
+def after_release(ctx: Ctx) -> None:
+    """Checkpoint 5 answered with /go: the owner accepted the candidate they tried on the devbox."""
+    version, sha = ctx.marker.get("version", ""), ctx.marker.get("sha", "")
+    release_call("accept", ctx.app, version, sha)
+    ctx.record_minutes("release")
+    ctx.comment(f"{NOTICE_PREFIX} ✅ Release `{version}` accepted and tagged ({sha[:7]}). The deploy to Kubernetes "
+                f"(stage 8 of docs/lifecycle.md) is not automated yet; it waits in {RELEASE_ISSUE}. Closing this work "
+                "item.")
+    ctx.g.call("PATCH", f"/repos/{ctx.repo}/issues/{ctx.n}", {"state": "closed"})
+    commit_ops(f"Release {version}: {ctx.app}#{ctx.n}")
+    notify(f"{ctx.app}: release {version} accepted", f"{ctx.app}#{ctx.n}: tagged; the deploy is next", priority=3)
 
 
 def after_merge(ctx: Ctx) -> None:
@@ -860,7 +907,8 @@ def after_staging_rework(ctx: Ctx) -> None:
     ctx.save(st)
 
 
-REWORK_HANDLERS = {"after_gate3": "after_plan_rework", "after_gate4": "after_staging_rework"}
+REWORK_HANDLERS = {"after_gate3": "after_plan_rework", "after_gate4": "after_staging_rework",
+                   "after_release": "after_staging_rework"}
 HANDLERS = {"after_gate1": after_gate1, "after_gate2": after_gate2, "after_research_questions": after_research_questions,
             "after_gate3": after_gate3, "after_timebox": after_timebox, "after_gate4": after_gate4, "manual": manual,
             "after_staging_rework": after_staging_rework, "after_plan_rework": after_plan_rework,
@@ -1574,7 +1622,9 @@ def pick_up(ctx: Ctx) -> None:
                "checkpoint; otherwise review it and reply `/go` as usual.", "after_gate1")
 
 
-HANDLERS["pick_up"] = pick_up  # defined after the table: the night shift's pick-up, retried with /go
+HANDLERS["pick_up"] = pick_up
+HANDLERS["release_candidate"] = release_candidate
+HANDLERS["after_release"] = after_release  # defined after the table: the night shift's pick-up, retried with /go
 
 
 def hold_lease(g: Gitea) -> bool:

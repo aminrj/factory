@@ -23,7 +23,7 @@ MODELS: dict[str, str] = {
 DEFAULT_MODEL = os.environ.get("FACTORY_DEFAULT_MODEL", "local")
 # The owner's own time on a gate (reading, trying, deciding), in minutes. Typing `minutes=N` records N; without it the
 # gate's typical time below is recorded and marked `default`, so the metrics can tell measured time from a guess.
-GATE_MINUTES: dict[str, int] = {"spec": 10, "threat_model": 5, "plan_review": 10, "code_review": 15, "rework": 5}
+GATE_MINUTES: dict[str, int] = {"spec": 10, "threat_model": 5, "plan_review": 10, "code_review": 15, "rework": 5, "release": 10}
 OPTIONS: dict[str, str] = {"minutes": "N (your own time on this gate, optional)", "model": "|".join(MODELS)}
 OPTION = re.compile(r"^([A-Za-z_][\w-]*)=(\S*)$")
 USAGE = "`/go [model=" + "|".join(MODELS) + "] [minutes=N]` (default: local model), `/stop`, `/rework [model=...] <what is wrong>`"

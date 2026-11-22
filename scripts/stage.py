@@ -242,7 +242,8 @@ def twin_args(app: str, image: str, port: int, env_file: str, host_net: bool) ->
     return run_args(f"stage-{app}-local", app, image, LOOPBACK, port, env_file, host_net)
 
 
-def up(app: str, issue: int | None = None, ref: str | None = None) -> dict:
+def up(app: str, issue: int | None = None, ref: str | None = None, image: str | None = None) -> dict:
+    """image: stage this already-built image (a release candidate from scripts/release.py) instead of building one."""
     g = Gitea()
     repo = f"{g.user}/{app}"
     clone = WORK / app
@@ -259,7 +260,7 @@ def up(app: str, issue: int | None = None, ref: str | None = None) -> dict:
 
     reg = load_registry()
     port = pick_port(reg, app)
-    image = f"{app}-stage:{sha[:7]}"
+    image = image or f"{app}-stage:{sha[:7]}"
     if not sh("docker", "images", "-q", image):
         archive = subprocess.run(["git", "archive", sha], cwd=clone, capture_output=True, check=True).stdout
         sh("docker", "build", "-q", "-t", image, "-", stdin=archive)
@@ -277,7 +278,7 @@ def up(app: str, issue: int | None = None, ref: str | None = None) -> dict:
     wait_healthy(f"http://{ip}:{port}/healthz")
     wait_healthy(f"http://{LOOPBACK}:{port}/healthz")
 
-    info = {"app": app, "issue": issue, "ref": label, "model": model_status, "sha": sha, "port": port, "network": "host" if host_net else "bridge",
+    info = {"app": app, "issue": issue, "ref": label, "image": image, "model": model_status, "sha": sha, "port": port, "network": "host" if host_net else "bridge",
             "ip": ip, "url": f"http://{host_name}:{port}/", "local_url": f"http://localhost:{port}/", "started": datetime.now(UTC).isoformat(timespec="seconds")}
     reg[app] = info
     save_registry(reg)
