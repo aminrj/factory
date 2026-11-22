@@ -20,3 +20,4 @@
 {"ts": "2026-11-22T06:28:44+00:00", "repo": "brevkoll", "issue": 15, "gate": "code_review", "minutes": 15, "source": "default", "comment_id": 811}
 {"ts": "2026-11-22T06:45:10+00:00", "repo": "brevkoll", "issue": 26, "gate": "spec", "minutes": 10, "source": "default", "comment_id": 831}
 {"ts": "2026-11-22T07:37:34+00:00", "repo": "brevkoll", "issue": 26, "gate": "threat_model", "minutes": 5, "source": "default", "comment_id": 863}
+{"ts": "2026-11-22T07:55:24+00:00", "repo": "brevkoll", "issue": 26, "gate": "threat_model", "minutes": 5, "source": "default", "comment_id": 878}

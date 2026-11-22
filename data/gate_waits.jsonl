@@ -35,3 +35,4 @@
 {"ts": "2026-11-22T06:45:10+00:00", "repo": "brevkoll", "issue": 26, "checkpoint": "after_gate1", "answer": "go", "wait_min": 13.3, "comment_id": 831}
 {"ts": "2026-11-22T07:08:02+00:00", "repo": "brevkoll", "issue": 15, "checkpoint": "manual", "answer": "go", "wait_min": 37.6, "comment_id": 846}
 {"ts": "2026-11-22T07:37:34+00:00", "repo": "brevkoll", "issue": 26, "checkpoint": "after_gate2", "answer": "go", "wait_min": 1.9, "comment_id": 863}
+{"ts": "2026-11-22T07:55:24+00:00", "repo": "brevkoll", "issue": 26, "checkpoint": "after_gate2", "answer": "go", "wait_min": 0.5, "comment_id": 878}
