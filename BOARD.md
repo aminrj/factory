@@ -1,17 +1,18 @@
 # Board
 
-_Generated 2026-11-22 19:10 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 19:25 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| (nothing) | | | |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 0.3 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
+| Show the app version on /healthz and in the page footer | brevkoll#32 |
 | Support a model endpoint that needs a client certificate (mutual TLS) | brevkoll#14 |
 
 ## spec-ready
