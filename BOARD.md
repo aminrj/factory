@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-22 14:53 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 15:11 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#26 | after_gate3-retry: a step failed | 2026-11-22T14:52+00:00 | 0.0 |
+| brevkoll#7 | after_gate2-fix: one thing is left for you | 2026-11-22T14:53+00:00 | 0.3 |
 
 ## idea
 
