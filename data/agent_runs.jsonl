@@ -35,3 +35,4 @@
 {"ts": "2026-11-22T05:09:11Z", "repo": "brevkoll", "issue": 19, "step": "implement", "duration_s": 97.1, "cost_usd": 0.6189899999999998, "turns": 24, "is_error": false, "fallback": false, "model": "default"}
 {"ts": "2026-11-22T05:13:13Z", "repo": "brevkoll", "issue": 19, "step": "validate", "duration_s": 89.4, "cost_usd": 0.5905456, "turns": 18, "is_error": false, "fallback": false, "model": "default"}
 {"ts": "2026-11-22T07:07:57Z", "repo": "brevkoll", "issue": 26, "step": "threat-model", "duration_s": 1354.6, "cost_usd": 4.501165, "turns": 28, "is_error": false, "fallback": false, "model": "local"}
+{"ts": "2026-11-22T09:54:39Z", "repo": "brevkoll", "issue": 7, "step": "spec", "duration_s": 654.3, "cost_usd": 1.2476, "turns": 119, "is_error": false, "fallback": false, "model": "local", "notional_cost_usd": 5.254716000000001, "cost_basis": "fast-equivalent", "energy_kwh": 0.0727}
