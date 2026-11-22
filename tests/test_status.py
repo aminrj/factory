@@ -63,6 +63,8 @@ class StateDir(unittest.TestCase):
         self.patch = mock.patch.object(o, "STATE", Path(self.tmp.name))
         self.patch.start()
         self.notify = mock.patch.object(o, "notify").start()
+        # an item whose last comment is a claim is running here: a real run holds its lock (stale claims: test_board)
+        mock.patch.object(o, "item_is_running", return_value=True).start()
 
     def tearDown(self) -> None:
         mock.patch.stopall()

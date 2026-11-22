@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 
 LABEL = "night/ok"
 TRAILER = "Approved-by-policy: night/ok"
-PRE_CODE = {"after_gate1", "after_gate2", "after_research_questions", "after_gate3"}
+PRE_CODE = {"pick_up", "after_gate1", "after_gate2", "after_research_questions", "after_gate3"}
 RETRY_CLASSES = ("model_unavailable", "rate_limit")
 BLOCKED_WAIT_MIN = 20
 BLOCKED_MAX = 3
@@ -112,7 +112,7 @@ def may_pass(pivot: dict, marker: dict[str, str], labels: set[str], recent: list
         return f"the model was {cls.group(1).replace('_', ' ')}; trying again" if streak <= BLOCKED_MAX else None
     if label.endswith("-retry"):
         return "a step failed; retrying within the budget"
-    return {"after_gate1": "the spec and holdout tests", "after_gate2": "the threat model",
+    return {"pick_up": "drafting the spec again", "after_gate1": "the spec and holdout tests", "after_gate2": "the threat model",
             "after_research_questions": "the research questions (unanswered ones are deferred by the planner)",
             "after_gate3": "the plan"}[resume]
 

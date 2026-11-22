@@ -94,13 +94,30 @@ class ClassifyTests(unittest.TestCase):
 
 
 class NormalizeTests(unittest.TestCase):
-    def test_system_messages_move_to_the_top_in_order(self) -> None:
+    def test_system_messages_stay_in_place_inside_the_user_turn(self) -> None:
         body = {"system": [{"type": "text", "text": "A"}],
                 "messages": [{"role": "user", "content": "hi"}, {"role": "system", "content": [{"type": "text", "text": "B"}]},
                              {"role": "system", "content": "C"}]}
         out = model_shim.normalize(body)
-        self.assertEqual([b["text"] for b in out["system"]], ["A", "B", "C"])
-        self.assertEqual(out["messages"], [{"role": "user", "content": "hi"}])
+        self.assertEqual(out["system"], [{"type": "text", "text": "A"}])  # the beginning of the prompt never changes
+        self.assertEqual([m["role"] for m in out["messages"]], ["user"])
+        texts = [b["text"] for b in out["messages"][0]["content"]]
+        self.assertEqual(texts, ["hi", "<system-reminder>\nB\n</system-reminder>", "<system-reminder>\nC\n</system-reminder>"])
+
+    def test_turn_after_turn_the_earlier_prompt_is_unchanged(self) -> None:
+        # the property the llama.cpp prompt cache needs: request k+1 starts with exactly what request k sent
+        turn1 = {"system": "S", "messages": [{"role": "user", "content": "do it"}, {"role": "system", "content": "env 1"}]}
+        turn2 = {"system": "S", "messages": [*turn1["messages"], {"role": "assistant", "content": "ok"},
+                                             {"role": "user", "content": "next"}, {"role": "system", "content": "env 2"}]}
+        a, b = model_shim.normalize(turn1), model_shim.normalize(turn2)
+        self.assertEqual(a["system"], b["system"])
+        self.assertEqual(b["messages"][:len(a["messages"])], a["messages"])
+
+    def test_a_system_message_after_an_assistant_turn_becomes_its_own_user_turn(self) -> None:
+        body = {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"},
+                             {"role": "system", "content": "note"}]}
+        out = model_shim.normalize(body)
+        self.assertEqual([m["role"] for m in out["messages"]], ["user", "assistant", "user"])
 
     def test_a_clean_request_is_unchanged(self) -> None:
         body = {"system": "S", "messages": [{"role": "user", "content": "hi"}]}
@@ -275,7 +292,7 @@ class PickTests(unittest.TestCase):
     def test_a_gpu_the_owner_holds_is_never_asked_for(self) -> None:
         class Desk(FakeUpstream):
             def do_GET(self) -> None:  # noqa: N802
-                self.reply(200, b'{"state": "desk", "reason": "llm code is serving elsewhere"}')
+                self.reply(200, b'{"state": "held", "reason": "llm desk for 4 h"}')
 
             def do_POST(self) -> None:  # noqa: N802
                 FakeUpstream.seen.append({"path": self.path})
@@ -288,8 +305,34 @@ class PickTests(unittest.TestCase):
                        LOCAL_MODEL_ARBITER_URL=f"http://127.0.0.1:{arb.server_address[1]}")
         found, why = model_shim.wait_for_model(cfg, 600, sleep=lambda s: None)
         self.assertIsNone(found)
-        self.assertIn("the GPU is the owner's", why)
+        self.assertIn("held for the owner", why)
         self.assertEqual(FakeUpstream.seen, [])  # no POST /request
+
+    def test_a_desk_model_that_is_loading_is_waited_for_not_refused(self) -> None:
+        class Loading(FakeUpstream):
+            def do_GET(self) -> None:  # noqa: N802
+                self.reply(200, b'{"state": "desk", "reason": "a desk server is starting"}')
+
+            def do_POST(self) -> None:  # noqa: N802
+                FakeUpstream.seen.append({"path": self.path})
+                self.reply(200, b"{}")
+        arb = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Loading)
+        threading.Thread(target=arb.serve_forever, daemon=True).start()
+        self.addCleanup(arb.shutdown)
+        FakeUpstream.seen = []
+        cfg = self.cfg(LOCAL_MODEL_SERVERS=f"code={self.dead}",
+                       LOCAL_MODEL_ARBITER_URL=f"http://127.0.0.1:{arb.server_address[1]}")
+        t = [0.0]
+        ticks = [0]
+
+        def sleep(s: float) -> None:
+            t[0] += s
+            ticks[0] += 1
+            if ticks[0] == 4:  # `llm code` finished loading
+                cfg["LOCAL_MODEL_SERVERS"] = f"code={self.live}"
+        found, why = model_shim.wait_for_model(cfg, 600, sleep=sleep, clock=lambda: t[0])
+        self.assertIsNotNone(found, why)
+        self.assertEqual(FakeUpstream.seen, [])  # it never asked the arbiter for its own model
 
     def test_check_prints_server_and_name(self) -> None:
         env = {"LOCAL_MODEL_SERVERS": f"code={self.live}", "HOME": self.tmp.name}
@@ -300,3 +343,11 @@ class PickTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FastEquivalentTests(unittest.TestCase):
+    def test_tokens_are_priced_at_the_fast_profiles_rates(self) -> None:
+        import dispatch
+        usage = {"input_tokens": 1_000_000, "output_tokens": 100_000, "cache_read_input_tokens": 2_000_000,
+                 "cache_creation_input_tokens": 0}
+        self.assertAlmostEqual(dispatch.fast_equivalent(usage), 2.0 + 1.0 + 0.2)

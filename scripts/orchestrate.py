@@ -1525,18 +1525,32 @@ def adopt(g: Gitea, repo: str, n: int, title: str) -> None:
                 "review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
     g.set_stage(repo, n, "idea")
     try:
-        dispatch(ctx, "spec")
+        pick_up(ctx)
     except StepFailed as e:
+        # A retryable checkpoint like any failed step: `/go` (or the night shift) drafts the spec again, within the
+        # retry budget. brevkoll#7 (2026-11-22) timed out once and got a checkpoint only a session could answer.
         night.record(STATE, datetime.now(UTC), f"{app}#{n}", "spec", "failed")
-        checkpoint(ctx, "spec-failed", "the night shift could not draft the spec",
-                   f"```\n{str(e)[-1200:]}\n```\n\nWrite the spec yourself (factory `scripts/new_change.py`), or fix "
-                   "the cause and remove and re-add the label to try again tonight.", "manual")
-        return
-    night.record(STATE, datetime.now(UTC), f"{app}#{n}", "spec", "drafted")
-    checkpoint(ctx, "1", "spec and holdout tests (drafted by the night shift)",
+        cls = FAILURE_CLASS.search(str(e))
+        label, title_ = (("spec-blocked", f"blocked: {cls.group(1)}") if cls
+                         else ("spec-retry", "the spec draft failed"))
+        checkpoint(ctx, label, title_, f"Diagnosis:\n\n```\n{str(e)[-1200:]}\n```\n\nReply `/go` to draft it again "
+                   "(add `model=fast` for the cloud), or write the spec yourself with `scripts/new_change.py`.",
+                   "pick_up", extra="" if cls else "retry-of=pick_up")
+
+
+def pick_up(ctx: Ctx) -> None:
+    """The spec step for an issue that has no spec yet, then Checkpoint 1."""
+    issue = ctx.g.get(f"/repos/{ctx.repo}/issues/{ctx.n}")
+    title = issue.get("title", "") if isinstance(issue, dict) else ""
+    dispatch(ctx, "spec")
+    night.record(STATE, datetime.now(UTC), f"{ctx.app}#{ctx.n}", "spec", "drafted")
+    checkpoint(ctx, "1", "spec and holdout tests (drafted by the factory)",
                f"An agent drafted the spec and the holdout tests for \"{title}\" on `{ctx.branch}`:\n\n"
-               f"- [spec.md]({ctx.file_link('spec.md')})\n\nThe night shift passes this checkpoint on the next tick. To "
-               "take it yourself, remove the label and answer as usual.", "after_gate1")
+               f"- [spec.md]({ctx.file_link('spec.md')})\n\nWith the label `{night.LABEL}` the night shift passes this "
+               "checkpoint; otherwise review it and reply `/go` as usual.", "after_gate1")
+
+
+HANDLERS["pick_up"] = pick_up  # defined after the table: the night shift's pick-up, retried with /go
 
 
 def hold_lease(g: Gitea) -> bool:

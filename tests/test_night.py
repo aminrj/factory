@@ -157,3 +157,38 @@ class NightLoopTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PickUpRetryTests(unittest.TestCase):
+    """brevkoll#7: the night pick-up timed out once and got a checkpoint only a session could answer."""
+
+    setUp = tlg.GateTests.setUp
+    fake_dispatch = tlg.GateTests.fake_dispatch
+    fake_ci = tlg.GateTests.fake_ci
+    bot = tlg.GateTests.bot
+
+    def test_a_failed_pick_up_is_retried_with_go(self) -> None:
+        with mock.patch.object(orchestrate, "dispatch", side_effect=orchestrate.StepFailed("`spec` timed out")):
+            orchestrate.adopt(self.g, "owner/app", 1, "a bug")  # type: ignore[arg-type]
+        cp = self.bot()
+        self.assertIn("CHECKPOINT spec-retry", cp)
+        self.assertIn("resume=pick_up", cp)
+        self.assertIsNotNone(may(dict(cp_from(cp))))  # the night shift may retry it
+        self.g.comment("owner/app", 1, "/go model=fast")
+        self.assertEqual(orchestrate.process(self.g, "owner/app", 1), "ran pick_up")  # type: ignore[arg-type]
+        self.assertEqual(self.steps_run(), ["spec"])
+        self.assertIn("CHECKPOINT 1", self.bot())
+
+    def steps_run(self) -> list[str]:
+        return [s for s, _ in self.dispatched]
+
+    def test_a_busy_model_blocks_without_spending_a_retry(self) -> None:
+        err = orchestrate.StepFailed("`spec` failed: [class: model_unavailable] loading")
+        with mock.patch.object(orchestrate, "dispatch", side_effect=err):
+            orchestrate.adopt(self.g, "owner/app", 1, "a bug")  # type: ignore[arg-type]
+        self.assertIn("CHECKPOINT spec-blocked", self.bot())
+        self.assertNotIn("retry-of", self.bot())
+
+
+def cp_from(body: str) -> dict:
+    return {"id": 99, "body": body, "created_at": "2026-11-22T00:00:00Z"}

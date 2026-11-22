@@ -65,21 +65,41 @@ def load_config(path: Path = CONFIG, env: dict[str, str] | None = None) -> dict[
     return cfg
 
 
+def _blocks(content: Any) -> list[Any]:
+    return [{"type": "text", "text": content}] if isinstance(content, str) else list(content or [])
+
+
 def normalize(body: dict[str, Any]) -> dict[str, Any]:
-    """Move every `role: system` message into the top-level system prompt, in order. Nothing else changes."""
+    """Fold every `role: system` message into the user message before it (the next one when it comes first), as text
+    wrapped in <system-reminder>. The Qwen template refuses a system message after the first one.
+
+    Never into the top-level system prompt: that changed the beginning of the prompt every few turns, so llama.cpp
+    could reuse only the system prompt from its cache and read the whole conversation again on every turn (80 s for
+    79k tokens per turn, 25-minute steps; 2026-11-22). Folding in place keeps everything before it byte-identical."""
     msgs = body.get("messages")
     if not isinstance(msgs, list) or not any(isinstance(m, dict) and m.get("role") == "system" for m in msgs):
         return body
-    system = body.get("system") or []
-    blocks: list[Any] = [{"type": "text", "text": system}] if isinstance(system, str) else list(system)
-    keep = []
+    out: list[Any] = []
+    waiting: list[Any] = []  # system text seen before any user message
     for m in msgs:
         if isinstance(m, dict) and m.get("role") == "system":
-            c = m.get("content", "")
-            blocks += [{"type": "text", "text": c}] if isinstance(c, str) else list(c)
-        else:
-            keep.append(m)
-    return {**body, "system": blocks, "messages": keep}
+            text = "".join(b.get("text", "") for b in _blocks(m.get("content")) if isinstance(b, dict))
+            block = {"type": "text", "text": f"<system-reminder>\n{text}\n</system-reminder>"}
+            prev = next((x for x in reversed(out) if isinstance(x, dict) and x.get("role") == "user"), None)
+            if prev is not None and prev is out[-1]:
+                prev["content"] = _blocks(prev.get("content")) + [block]
+            elif prev is None:
+                waiting.append(block)
+            else:  # after an assistant turn: a user turn of its own keeps the order and the prefix
+                out.append({"role": "user", "content": [block]})
+            continue
+        if isinstance(m, dict) and m.get("role") == "user" and waiting:
+            m = {**m, "content": waiting + _blocks(m.get("content"))}
+            waiting = []
+        out.append(dict(m) if isinstance(m, dict) else m)
+    if waiting:
+        out.insert(0, {"role": "user", "content": waiting})
+    return {**body, "messages": out}
 
 
 def connection(cfg: dict[str, str], timeout: float = UPSTREAM_TIMEOUT_S) -> tuple[http.client.HTTPConnection, str]:
@@ -168,7 +188,9 @@ def arbiter(cfg: dict[str, str], method: str = "GET") -> dict[str, Any] | None:
 def wait_for_model(cfg: dict[str, str], wait_s: float, poll_s: float = 15,
                    sleep: Any = time.sleep, clock: Any = time.monotonic) -> tuple[dict[str, str] | None, str]:
     """pick(), and when nothing answers: ask the arbiter for its model, or wake the host (once), then poll until
-    `wait_s` runs out. Never loads a model itself and never asks for one while the GPU is the owner's (desk/held)."""
+    `wait_s` runs out. Never loads a model itself and never asks for one while the GPU is the owner's: on `held` it
+    gives up at once; on `desk` (one of the owner's models is loading or serving) it keeps waiting, since that model may be
+    one this factory uses (`llm code` while it loads)."""
     found, why = pick(cfg)
     if found or wait_s <= 0:
         return found, why
@@ -179,8 +201,10 @@ def wait_for_model(cfg: dict[str, str], wait_s: float, poll_s: float = 15,
             woke = True
             res = subprocess.run(cfg["LOCAL_MODEL_WAKE_CMD"], shell=True, capture_output=True, text=True, timeout=60)
             notes.append("wake sent" if res.returncode == 0 else f"wake failed: {(res.stdout + res.stderr).strip()[-120:]}")
-        elif st is not None and st.get("state") in ("desk", "held"):
-            return None, f"{why}; the GPU is the owner's ({st.get('state')}: {st.get('reason', '')})"
+        elif st is not None and st.get("state") == "held":  # `llm desk`: the owner reserved the GPU
+            return None, f"{why}; the GPU is held for the owner ({st.get('reason', '')})"
+        elif st is not None and st.get("state") == "desk":
+            pass  # the owner's model is loading or serving (`llm code` is one of ours): wait, never ask for another
         elif st is not None and not asked:
             asked = True
             arbiter(cfg, "POST")

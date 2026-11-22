@@ -134,3 +134,28 @@ class CostTests(unittest.TestCase):
                 {"ts": "2026-11-22T10:00:00Z", "model": "fast", "cost_usd": 0.7, "step": "plan"}]) + "\n")
             s = board.analytics(d, NOW)
         self.assertAlmostEqual(s["cost_7d"], 0.7)
+
+
+class LocalBenchmarkTests(unittest.TestCase):
+    def test_local_work_is_shown_at_fast_prices_with_its_energy_and_kept_out_of_cloud_spend(self) -> None:
+        import os
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"FACTORY_KWH_PRICE": "2.0"}):
+            d = Path(tmp)
+            (d / "agent_runs.jsonl").write_text(json.dumps(
+                {"ts": "2026-11-22T10:00:00Z", "model": "local", "cost_usd": 1.25, "cost_basis": "fast-equivalent",
+                 "energy_kwh": 0.15, "step": "spec"}) + "\n")
+            s = board.analytics(d, NOW)
+            page = board.render([], [], s, [], NOW, "host")
+        self.assertEqual((s["cost_7d"], s["local_fast_equiv"], s["local_kwh"]), (0.0, 1.25, 0.15))
+        self.assertIn("$1.25", page)
+        self.assertIn("0.30 SEK", page)
+
+
+class StaleClaimTests(unittest.TestCase):
+    def test_a_claim_without_a_process_is_not_agent_working(self) -> None:
+        claim = {"body": "▶ Nothing automated is left for this gate.", "created_at": "2026-11-22T07:08:00Z"}
+        c = board.card(issue(), "owner/app", "https://git", {"pivot": claim, "running": False, "stale": True,
+                                                              "pending": []}, [], NOW, {})
+        self.assertEqual(c["col"], "blocked")
+        self.assertIn("stopped without posting a checkpoint", c["why"])

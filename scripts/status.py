@@ -104,8 +104,12 @@ def issue_view(g: Gitea, repo: str, n: int) -> dict:
     pivot = next((c for c in reversed(mine) if c["body"].startswith((o.CP_PREFIX, o.CLAIM_PREFIX))), None)
     owner = [c for c in mine if by_owner(g, c) and not c["body"].startswith((o.CP_PREFIX, o.CLAIM_PREFIX, o.NOTICE_PREFIX, "Agent step"))]
     after = pivot["id"] if pivot else 0
-    return {"repo": repo, "n": n, "app": repo.split("/")[1], "pivot": pivot,
-            "running": bool(pivot and pivot["body"].startswith(o.CLAIM_PREFIX)),
+    app = repo.split("/")[1]
+    claimed = bool(pivot and pivot["body"].startswith(o.CLAIM_PREFIX))
+    # a claim is only a claim: the item runs while a process holds its lock (brevkoll#15 showed "Agent working" for
+    # hours after an old reply was posted as a claim)
+    alive = claimed and (o.item_is_running(app, n) or lanes.item_running(o.STATE, app, n))
+    return {"repo": repo, "n": n, "app": app, "pivot": pivot, "running": alive, "stale": claimed and not alive,
             "pending": [c for c in owner if c["id"] > after and o.is_command(c["body"])]}
 
 
@@ -135,6 +139,8 @@ def ack_text(view: dict, cmd: dict, tick_s: int | None, running: dict | None) ->
                 "moves to a new checkpoint, and this command will not run there (the same words can mean something "
                 "else at the next checkpoint). Answer that checkpoint when it appears; `/stop` ends the run between two "
                 "phases.")
+    if view.get("pivot") and o.parse_marker(view["pivot"]["body"]).get("resume") == "manual":
+        return None  # nothing will start: the tick answers at once that a session is needed
     if lanes.enabled() and (o.GO.match(cmd["body"]) or o.REWORK.match(cmd["body"])):
         opts = o.command_options(cmd["body"])
         lane = lanes.lane_of(opts.model or commands.DEFAULT_MODEL)

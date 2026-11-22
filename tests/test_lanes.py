@@ -105,3 +105,13 @@ class HandOffTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManualGateAckTests(unittest.TestCase):
+    def test_no_promise_to_start_at_a_manual_gate(self) -> None:
+        view = {"running": False, "app": "app", "n": 1,
+                "pivot": {"body": "🛑 CHECKPOINT x-failed: y\n<!--factory:resume=manual;stop=-->"}}
+        full = [{"app": "app", "n": 9, "lane": "local", "started": time.time(), "what": "plan"}]
+        with mock.patch.dict(os.environ, {"FACTORY_LANES": "on"}), mock.patch.object(lanes, "running", return_value=full):
+            os.environ.pop("FACTORY_CHILD", None)
+            self.assertIsNone(status.ack_text(view, {"body": "/go"}, None, None))

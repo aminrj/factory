@@ -84,6 +84,8 @@ def card(issue: dict, repo: str, base_url: str, view: dict | None, runs: list[di
     pivot = view["pivot"] if view else None
     running = bool(view and view["running"])
     col, label = column_of(pivot, running)
+    if view and view.get("stale"):
+        col, label = "blocked", "stopped"
     if issue.get("state") == "closed":
         col = "done"
     why, who, since = "", "you", pivot["created_at"] if pivot else issue.get("created_at", "")
@@ -95,6 +97,8 @@ def card(issue: dict, repo: str, base_url: str, view: dict | None, runs: list[di
         step = steps.get((app, n))
         who = f"agent · {model.group(1) if model else 'default'}"
         why = f"step `{step[0]}`, {step[1] // 60} min" if step else "CI, staging or the next phase"
+    elif view and view.get("stale") and col == "blocked":
+        why = "the last step stopped without posting a checkpoint (no process runs it); see the issue"
     elif col == "inbox":
         who, why = "nobody yet", "no checkpoint: start it with new_change.py, or label it for the night shift"
     elif col == "done":
@@ -136,6 +140,7 @@ def analytics(data: Path, now: datetime) -> dict[str, Any]:
     for w in waits:
         by_gate[str(w.get("checkpoint", "?"))].append(float(w.get("wait_min") or 0))
     local = count_model.get("local", 0)
+    local_runs = [r for r in recent if r.get("model") == "local"]
     failed = [r for r in recent if r.get("is_error")]
     classes: dict[str, int] = defaultdict(int)
     for r in failed:
@@ -145,6 +150,9 @@ def analytics(data: Path, now: datetime) -> dict[str, Any]:
                       "step": r.get("step"), "model": r.get("model") or "default",
                       "class": r.get("class") or "unknown"} for r in reversed(failed)][:15],
         "classes": sorted(classes.items(), key=lambda x: -x[1]),
+        "local_fast_equiv": sum(float(r.get("cost_usd") or 0) for r in local_runs if r.get("cost_basis") == "fast-equivalent"),
+        "local_kwh": sum(float(r.get("energy_kwh") or 0) for r in local_runs),
+        "kwh_price": os.environ.get("FACTORY_KWH_PRICE", ""),
         "runs_7d": len(recent), "cost_7d": sum(by_model.values()), "errors_7d": sum(1 for r in recent if r.get("is_error")),
         "local_share": (local / len(recent)) if recent else 0.0,
         "by_model": sorted(((m, count_model[m], c) for m, c in by_model.items()), key=lambda x: -x[1]),
@@ -308,6 +316,10 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
             f"<div class='tile'><div class='v'>{stats['runs_7d']}</div><small>agent steps</small></div>",
             f"<div class='tile'><div class='v'>${stats['cost_7d']:.2f}</div><small>cloud spend</small></div>",
             f"<div class='tile'><div class='v'>{stats['local_share'] * 100:.0f}%</div><small>steps on the local model</small></div>",
+            f"<div class='tile'><div class='v'>${stats['local_fast_equiv']:.2f}</div><small>local work at `fast` prices "
+            f"(saved) · GPU ~{stats['local_kwh']:.1f} kWh"
+            + (f" ≈ {stats['local_kwh'] * float(stats['kwh_price']):.2f} {os.environ.get('FACTORY_KWH_CURRENCY', 'SEK')}"
+               if stats["kwh_price"] else "") + "</small></div>",
             f"<div class='tile'><a href='#failures'><div class='v {'bad' if stats['errors_7d'] else ''}'>{stats['errors_7d']}</div>"
             "<small>failed steps ↓</small></a></div>",
             f"<div class='tile'><div class='v'>{hm.get('typed', 0) + hm.get('default', 0)} min</div><small>your gate time "

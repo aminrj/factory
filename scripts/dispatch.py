@@ -111,6 +111,17 @@ def classify(text: str) -> str | None:
     return next((name for name, rx in FAILURE_CLASSES if rx.search(text or "")), None)
 
 
+# The `fast` profile's prices (claude-sonnet-5-5, USD per million tokens, 2026-11): local runs are priced at these rates
+# so the board can show what the local model saves against the electricity it uses.
+FAST_PRICES = {"input_tokens": 2.00, "output_tokens": 10.00, "cache_read_input_tokens": 0.10,
+               "cache_creation_input_tokens": 2.50}
+LOCAL_WATTS = float(os.environ.get("FACTORY_LOCAL_WATTS", "400"))  # the GPU workstation under load (RTX 3090 + host)
+
+
+def fast_equivalent(usage: dict) -> float:
+    return round(sum(float(usage.get(k) or 0) * v for k, v in FAST_PRICES.items()) / 1_000_000, 4)
+
+
 MODEL_WAIT_S = int(os.environ.get("FACTORY_MODEL_WAIT_S", "600"))  # time for a woken PC or the arbiter to bring a model
 
 
@@ -341,6 +352,11 @@ def main() -> None:
     wt = WORK / "worktrees" / f"{args.repo}-issue-{n}"
     _, human_email = human_identity(main_clone)
 
+    if step == "spec" and wt.exists() and not run("git", "ls-remote", "--heads", "origin", branch, cwd=main_clone):
+        # a spec draft that never got pushed (a timeout, a crash): start again from main, or the retry refuses on it
+        run("git", "fetch", "-q", "origin", cwd=main_clone)
+        run("git", "reset", "-q", "--hard", "origin/main", cwd=wt)
+        run("git", "clean", "-qfd", cwd=wt)
     ensure_worktree(main_clone, branch, wt)
     labels = {lab["name"] for lab in g.get(f"/repos/{repo}/issues/{n}/labels")}
     policy = POLICY_LABEL in labels and label_added_by_owner(g, repo, n, POLICY_LABEL)
@@ -406,8 +422,13 @@ def main() -> None:
         "is_error": bool(result.get("is_error")) or proc.returncode != 0, "fallback": False,
         "model": args.model or "default",
     }
-    if args.model == "local":  # Claude Code prices every run as if Claude did it; on the local model nothing is spent
-        record["notional_cost_usd"], record["cost_usd"] = record["cost_usd"], 0.0
+    if args.model == "local":
+        # Nothing is spent in the cloud. For the benchmark the run is priced as if the `fast` profile had done it (its
+        # tokens at Sonnet rates; Claude Code's own figure assumes another model), plus the GPU's electricity estimate.
+        record["notional_cost_usd"] = record["cost_usd"]
+        record["cost_usd"] = fast_equivalent(result.get("usage") or {})
+        record["cost_basis"] = "fast-equivalent"
+        record["energy_kwh"] = round(duration * LOCAL_WATTS / 3_600_000, 4)
     if record["is_error"]:  # the class only: data/ is mirrored, an error text may hold internal names
         record["class"] = classify(str(result.get("result"))[-500:]) or "agent_error"
     DATA.mkdir(exist_ok=True)
@@ -463,7 +484,8 @@ def main() -> None:
     summary = str(result.get("result", ""))[:3500]
     changed = run("git", "diff", "--name-only", f"{head_before}..HEAD", cwd=wt).splitlines()
     links = changed_file_links(g.repo_url(repo), branch, changed, n)
-    spent = "local model, no cloud tokens" if args.model == "local" else f"cost {record['cost_usd']} USD"
+    spent = (f"local model, no cloud tokens; ${record['cost_usd']:.2f} at `fast` prices, ~{record['energy_kwh']:.2f} kWh"
+             if args.model == "local" else f"cost {record['cost_usd']} USD")
     g.comment(repo, n, f"Agent step `{step}` finished in {duration / 60:.1f} min "
                        f"({spent}). PR: #{pr['number']}\n\n{summary}\n\n{links}\n"
                        f"- [Pull request: every change]({pr['html_url']}/files)")
