@@ -52,7 +52,11 @@ TIMEOUT_S = int(os.environ.get("FACTORY_STEP_TIMEOUT_S", "2700"))
 ALLOWED = ("Read,Write,Edit,Glob,Grep,Bash(uv:*),Bash(git status),Bash(git diff:*),Bash(git log:*),"
            "Bash(git add:*),Bash(git commit:*),ToolSearch,TaskCreate,TaskUpdate,TaskList,TodoWrite,"
            # read-only shell commands: denying them cost turns of flailing (brevkoll#29: ls, cat denied, then retries)
-           "Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(git show:*)")
+           "Bash(ls:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(wc:*),Bash(find:*),Bash(git show:*),"
+           # the repo's own check scripts (quality.sh, check-*.sh): the factory runs them after the agent anyway, and
+           # denying them made agents ask for approval turn after turn (brevkoll#32 validate, 2026-11-22). Running is
+           # not editing: the guards still refuse any change to scripts/check-*.
+           "Bash(bash scripts/:*)")
 
 
 def run(*args: str, cwd: Path, check: bool = True, env: dict[str, str] | None = None) -> str:
