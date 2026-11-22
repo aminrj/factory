@@ -1,18 +1,19 @@
 # Board
 
-_Generated 2026-11-22 15:11 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 15:31 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate2-fix: one thing is left for you | 2026-11-22T14:53+00:00 | 0.3 |
+| brevkoll#26 | after_gate3-retry: a step failed | 2026-11-22T15:11+00:00 | 0.3 |
+| brevkoll#7 | after_gate2-fix: one thing is left for you | 2026-11-22T14:53+00:00 | 0.6 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| Uploaded a 256ko pdf file to the app and got an error File too large. | brevkoll#29 |
 
 ## spec-ready
 
