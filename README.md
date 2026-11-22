@@ -26,6 +26,8 @@ I answer each gate with a comment on the Gitea work issue (`/go`, `/rework <note
 
 At night, issues I label `night/ok` move through gates 1 to 3 on their own, on the local model, and stop at the review for me: [docs/night-shift.md](docs/night-shift.md) (also: what each checkpoint is).
 
+The whole path of an app, from a pasted spec to production on Kubernetes, and what is still missing: [docs/lifecycle.md](docs/lifecycle.md).
+
 ## Rules
 
 1. No real user, no build.
