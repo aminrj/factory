@@ -1,1 +1,2 @@
 {"ts": "2026-11-22T18:54:26Z", "app": "brevkoll", "version": "v2026.11.22.2", "sha": "25810c436f05e58e7d03f2fe0f1b4ad2a31a608d", "digest": "sha256:1cf16af9a29af6ad1f795e581399abd799e95953e4cb4dcd6a69b2b71c67c82c", "findings": {"fixed": 0, "unfixed": 146, "critical": 1}, "state": "candidate"}
+{"ts": "2026-11-22T18:55:26Z", "app": "brevkoll", "version": "v2026.11.22.2", "sha": "25810c436f05e58e7d03f2fe0f1b4ad2a31a608d", "state": "accepted"}
