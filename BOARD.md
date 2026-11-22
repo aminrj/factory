@@ -1,18 +1,17 @@
 # Board
 
-_Generated 2026-11-22 19:25 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 19:35 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 0.3 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 0.4 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| Show the app version on /healthz and in the page footer | brevkoll#32 |
 | Support a model endpoint that needs a client certificate (mutual TLS) | brevkoll#14 |
 
 ## spec-ready
@@ -25,6 +24,7 @@ _Generated 2026-11-22 19:25 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
+| Show the app version on /healthz and in the page footer | brevkoll#32 |
 | Uploaded a 256ko pdf file to the app and got an error File too large. | brevkoll#29 |
 | Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
 | Ready for the cluster: the model over mutual TLS, and a hardened deploy/ base | brevkoll#19 |
