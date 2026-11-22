@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-22 12:34 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 12:54 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#26 | 3: approve the plan or send it back | 2026-11-22T12:33+00:00 | 0.0 |
+| (nothing) | | | |
 
 ## idea
 
@@ -18,13 +18,13 @@ _Generated 2026-11-22 12:34 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
 | Chunked uploads without Content-Length are only rejected after parsing | brevkoll#7 |
 
 ## building
 
 | Item | Issue |
 |---|---|
+| Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
 | Ready for the cluster: the model over mutual TLS, and a hardened deploy/ base | brevkoll#19 |
 | UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
 
