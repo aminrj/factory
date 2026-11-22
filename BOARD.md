@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-22 09:54 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 10:15 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#26 | after_gate2-retry: research can run again (repaired by hand) | 2026-11-22T09:47+00:00 | 0.1 |
+| (nothing) | | | |
 
 ## idea
 
