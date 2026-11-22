@@ -1,11 +1,12 @@
 # Board
 
-_Generated 2026-11-22 06:26 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 06:28 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
+| brevkoll#26 | after_gate1-fix: one thing is left for you | 2026-11-22T06:26+00:00 | 0.0 |
 | brevkoll#19 | 4b: merged and mirrored; the release is not automated yet | 2026-11-22T06:17+00:00 | 0.2 |
 
 ## idea
