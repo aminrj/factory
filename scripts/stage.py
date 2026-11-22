@@ -24,6 +24,7 @@ Rules (the human only clicks the link):
     ~/.config/factory/apps/<app>.env adds app-specific settings. Both files are mode 0600 and never tracked.
     Do not copy a secret into them: `LLM_API_KEY_FILE=<path>` makes stage.py read the key from its source file.
     `scripts/doctor.py` checks all of this.
+  - APP_VERSION is set in the container to the build it runs (the release tag, else the commit), so the app can show it.
   - The URL is only ever written to Gitea comments and the ignored state/ folder, never to a tracked file.
   - Two containers per app, same image and policy: one on the tailnet address (phones and other devices) and a twin on
     127.0.0.1 for a browser on this machine (the Windows host cannot reach the tailnet address of its own WSL service).
@@ -262,6 +263,10 @@ def up(app: str, issue: int | None = None, ref: str | None = None, image: str | 
     # through it and got a 14-hour-old build left on the workstation, not the devbox build the comment named.
     local_link = model.pop("STAGING_LOCAL_LINK", "").lower() in ("1", "on", "yes", "true")
     model = {k: v for k, v in model.items() if not k.startswith("STAGING_")}
+    # The build the owner is looking at, for the app to show (brevkoll#32: "I cannot tell which build I am looking at").
+    # A release candidate shows its version tag, a review build its commit.
+    tag = image.rsplit(":", 1)[-1] if image else ""
+    model.setdefault("APP_VERSION", tag if tag.startswith("v") else sha[:7])
     model_status = preflight_model(model)
 
     reg = load_registry()

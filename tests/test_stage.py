@@ -177,6 +177,19 @@ class UpTests(unittest.TestCase):
         info = self.up({"LLM_BASE_URL": "http://m", "STAGING_LOCAL_LINK": "on"}, "app-stage:abcdef1")
         self.assertTrue(info["local_url"].startswith("http://localhost:"))
 
+    def test_the_container_is_told_which_build_it_runs(self) -> None:
+        written = []
+        real = stage.tempfile.NamedTemporaryFile
+
+        def capture(*a: object, **k: object):  # type: ignore[no-untyped-def]
+            f = real(*a, **k)
+            orig = f.write
+            f.write = lambda text: (written.append(text), orig(text))[1]  # type: ignore[method-assign]
+            return f
+        with mock.patch.object(stage.tempfile, "NamedTemporaryFile", side_effect=capture):
+            self.up({"LLM_BASE_URL": "http://m"}, "app-stage:abcdef1")
+        self.assertIn("APP_VERSION=abcdef1\n", "".join(written))
+
     def test_refuses_when_the_container_runs_another_build(self) -> None:
         with self.assertRaisesRegex(stage.StageError, "not app-stage:abcdef1"):
             self.up({"LLM_BASE_URL": "http://m"}, "app-stage:0a6bfbd")
