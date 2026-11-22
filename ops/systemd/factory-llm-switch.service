@@ -1,0 +1,12 @@
+[Unit]
+Description=Switch the local model when the owner sends /llm on the factory status issue (scripts/llm_switch.py)
+
+[Service]
+Type=oneshot
+Environment=WORK=%h/git/software-factory
+EnvironmentFile=-%h/.config/factory/host.env
+EnvironmentFile=-%h/.config/factory/identity.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/git/software-factory
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/llm_switch.py
+TimeoutStartSec=30min

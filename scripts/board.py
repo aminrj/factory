@@ -187,7 +187,7 @@ border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:po
 .chip[aria-pressed=true]{background:var(--accent);color:var(--bg);border-color:var(--accent)}.chip b{font-weight:700}
 .health{display:flex;flex-wrap:wrap;gap:6px;padding:8px 16px}.pill{background:var(--panel);border:1px solid var(--line);
 border-radius:999px;padding:4px 10px;font-size:13px}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
-.board{display:grid;grid-template-columns:repeat(6,minmax(210px,1fr));gap:10px;padding:4px 16px 16px;overflow-x:auto}
+.board{display:grid;grid-template-columns:repeat(7,minmax(200px,1fr));gap:10px;padding:4px 16px 16px;overflow-x:auto}
 .col{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 8px;min-height:80px}
 .col>summary{list-style:none;cursor:pointer;font-size:13px;margin:4px;color:var(--muted);text-transform:uppercase;
 letter-spacing:.04em;display:flex;justify-content:space-between}.col>summary::-webkit-details-marker{display:none}
@@ -207,7 +207,8 @@ th{color:var(--muted);font-weight:500}td.n{text-align:right;font-variant-numeric
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
 .barline{display:flex;align-items:center;gap:8px;font-size:13px;margin:4px 0}.barline i{display:block;height:10px;
 border-radius:5px;background:var(--bad);min-width:4px}.empty{color:var(--muted);font-size:13px;padding:4px}
-.hide{display:none!important}
+.hide{display:none!important}.arch{font:inherit;font-size:12px;padding:2px 8px;border-radius:6px;
+border:1px solid var(--line);background:var(--panel);color:var(--muted);cursor:pointer;min-height:28px}
 @media (max-width:760px){.board{grid-template-columns:1fr;overflow:visible}.col[data-col=done]:not([open]){min-height:0}}
 """
 
@@ -233,6 +234,14 @@ document.querySelectorAll('.col').forEach(function(col){var n=col.querySelectorA
 col.querySelector('.cnt').textContent=n;col.classList.toggle('hide',f!=='all'&&n===0)});
 try{localStorage.setItem('fb',JSON.stringify({q:q.value,f:f}))}catch(e){}}
 q.addEventListener('input',apply);chips.forEach(function(c){c.addEventListener('click',function(){f=(f===c.dataset.f&&f!=='all')?'all':c.dataset.f;apply()})});
+var arch={};try{arch=JSON.parse(localStorage.getItem('fb-arch')||'{}')}catch(e){}
+var done=document.querySelector('.col[data-col=done]'),box=document.querySelector('.col[data-col=archived]');
+function place(){document.querySelectorAll('.arch').forEach(function(b){var c=b.closest('.card'),a=!!arch[b.dataset.k];
+b.textContent=a?'restore':'archive';(a?box:done).appendChild(c)});
+box.querySelector('.empty').classList.toggle('hide',box.querySelectorAll('.card').length>0)}
+document.querySelectorAll('.arch').forEach(function(b){b.addEventListener('click',function(){if(arch[b.dataset.k])
+delete arch[b.dataset.k];else arch[b.dataset.k]=1;try{localStorage.setItem('fb-arch',JSON.stringify(arch))}catch(e){}
+place();apply()})});place();
 if(window.matchMedia('(max-width:760px)').matches){document.querySelectorAll('.col[data-col=done],.col[data-col=inbox]').forEach(function(d){d.open=false})}
 apply()})();
 """
@@ -261,8 +270,10 @@ def _card_html(c: dict) -> str:
         extra += f"<details class='more'><summary>What went wrong</summary><pre>{esc(c['diagnosis'])}</pre></details>"
     search = " ".join([c["key"], c["title"], c["why"], c["who"], c["label"]]).lower()
     return (f"<div class='card' data-s='{esc(search)}' data-tags='{esc(' '.join(tags))}'>"
-            f"<div class='k'><a href='{esc(c['url'])}'>{esc(c['key'])}</a><a href='{esc(c['url'])}' "
-            f"title='open the issue to answer'>open →</a></div>"
+            f"<div class='k'><a href='{esc(c['url'])}'>{esc(c['key'])}</a>"
+            + (f"<button class='arch' data-k='{esc(c['key'])}' title='hide it on this device; Archived lane to restore'>"
+               "archive</button>" if c["col"] == "done" else
+               f"<a href='{esc(c['url'])}' title='open the issue to answer'>open →</a>") + "</div>"
             f"<div class='t'>{esc(c['title'])}</div><div class='why'>{esc(c['why'])}</div><div class='meta'>"
             + (f"<span class='{who_cls}'>{esc(c['who'])}</span>" if c["who"] else "")
             + (f"<span>{esc(c['since'])}</span>" if c["since"] else "")
@@ -310,6 +321,9 @@ def render(cards: list[dict], health: list[tuple[str, str, str]], stats: dict[st
                    f"<span class='cnt'>{len(cols[key])}</span></summary>")
         out += [_card_html(c) for c in cols[key]] or ["<div class='empty'>nothing</div>"]
         out.append("</details>")
+    out.append("<details class='col' data-col='archived'><summary><span>Archived (this device)</span>"
+               "<span class='cnt'>0</span></summary><div class='empty'>Done items you archive land here; "
+               "“restore” puts them back. Nothing changes on the issue.</div></details>")
     out.append("</div>")
     hm = stats["human_min"]
     out += ["<section><h2>Last 7 days</h2><div class='tiles'>",

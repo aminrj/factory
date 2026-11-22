@@ -17,6 +17,11 @@ for u in "${units[@]}"; do
   systemctl --user link "$here/$u.service" "$here/$u.timer"
   systemctl --user enable --now "$u.timer"
 done
+# the /llm model switcher: only on the GPU workstation (host.env says FACTORY_LLM_SWITCH=on)
+if grep -qs '^FACTORY_LLM_SWITCH=on' "$HOME/.config/factory/host.env"; then
+  systemctl --user link "$here/factory-llm-switch.service" "$here/factory-llm-switch.timer"
+  systemctl --user enable --now factory-llm-switch.timer
+fi
 # the board page (served, not timed): only where staging.env names the address to listen on
 if [ -f "$HOME/.config/factory/staging.env" ]; then
   systemctl --user link "$here/factory-board.service"

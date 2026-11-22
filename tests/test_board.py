@@ -159,3 +159,16 @@ class StaleClaimTests(unittest.TestCase):
                                                               "pending": []}, [], NOW, {})
         self.assertEqual(c["col"], "blocked")
         self.assertIn("stopped without posting a checkpoint", c["why"])
+
+
+class ArchiveTests(unittest.TestCase):
+    def test_done_cards_can_be_archived_on_this_device_only(self) -> None:
+        done = board.card(issue(state="closed"), "owner/app", "https://git", None, [], NOW, {})
+        mine = board.card(issue(n=2), "owner/app", "https://git", None, [], NOW, {})
+        with tempfile.TemporaryDirectory() as tmp:
+            page = board.render([done, mine], [], board.analytics(Path(tmp), NOW), [], NOW, "host")
+        self.assertIn("data-k='app#1'", page)  # the done card has the button
+        self.assertNotIn("data-k='app#2'", page)  # an open one has not
+        self.assertIn("data-col='archived'", page)
+        self.assertIn("localStorage", page)
+        self.assertNotIn("method='post'", page.lower())  # nothing is written anywhere but the browser

@@ -1,0 +1,9 @@
+[Unit]
+Description=Check for /llm commands every minute (GPU workstation only: FACTORY_LLM_SWITCH=on)
+
+[Timer]
+OnCalendar=*-*-* *:*:20
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

@@ -359,6 +359,7 @@ def run(g: Gitea, print_only: bool = False) -> str:
                   spend_today(now), recent_log(o.WORK))
     if not print_only:
         g.call("PATCH", f"/repos/{g.user}/factory/issues/{status_issue(g)}", {"body": body})
+        publish_lanes(g)
         try:
             write_board(g, now, views, steps, tick_s, beat_age, mirrors, spend_today(now), running)
         except Unreachable:
@@ -366,6 +367,17 @@ def run(g: Gitea, print_only: bool = False) -> str:
         except Exception as e:  # noqa: BLE001 - the board is a view; the status issue above is the fallback
             o.alarm(f"board-{type(e).__name__}", "the board page failed", f"{type(e).__name__}: {str(e)[:200]}")
     return body
+
+
+def publish_lanes(g: Gitea) -> None:
+    """What runs in each lane, for the model switcher on the GPU workstation (it waits for an empty local lane)."""
+    if not lease.enabled() or not lanes.enabled():
+        return
+    try:
+        lease.Lease(g).write({lane: [f"{r['app']}#{r['n']}" for r in lanes.busy(o.STATE, lane)]
+                              for lane in ("local", "cloud")} | {"at": time.time()}, "FOREMAN_LANES")
+    except Exception as e:  # noqa: BLE001 - the switcher then treats the lane as free; say why in the journal
+        o.log(f"status: could not publish the lanes: {type(e).__name__}")
 
 
 BOARD_FILE = "board/index.html"

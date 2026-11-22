@@ -65,3 +65,28 @@ CP3 anyway), anything you have not decided yet.
 - The same model family writes the holdout tests (spec step) and the code (implement step) of a night item. They run as
   separate agents with separate prompts, and the guard stops the implementer from editing the tests, but the tests are
   not independent of the model in the way your own CP1 is. Read the tests at CP4.
+
+## Switching the local model from the phone: `/llm`
+
+Comment on the pinned **Factory status** issue (factory, "Factory status"):
+
+| Comment | What happens |
+|---|---|
+| `/llm status` | the answer shows what is loaded now (`llm status`) |
+| `/llm code` | Qwen3.6-35B-A3B: fast, the factory's local model for now |
+| `/llm 38` | Qwen3.8-27B: slower, stronger |
+| `/llm agent` | stops everything; the arbiter brings back the assistant's model after 10 quiet minutes |
+| `/llm off` | stops everything |
+| add `now` | switch even while a local step runs (that step fails and is tried again later) |
+
+The GPU workstation checks every minute (`factory-llm-switch.timer`, only where `FACTORY_LLM_SWITCH=on`). It obeys
+only your login, answers at once, and switches only through your own `llm` script, which stops every model server
+and waits for the GPU memory to be free before it starts the next one: a model is never loaded on top of another.
+Without `now` it waits until the local lane is empty, and the foreman starts no new local step while a switch is
+pending. It gives up after 3 hours.
+
+## The board's Archived lane
+
+Done items have an **archive** button: the card moves to the folded **Archived** lane on that device (browser
+storage), and **restore** puts it back. Nothing changes on the issue; the board stays read-only. Done items older
+than 7 days leave the board by themselves.

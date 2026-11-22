@@ -990,6 +990,19 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
     return process_inline(g, repo, n)
 
 
+def model_switch_pending(g: Gitea) -> str:
+    """The model the owner asked to switch to with `/llm` (scripts/llm_switch.py), while the switch waits or runs: no
+    new local step starts then. Empty when none, or older than 3 hours (a switcher that died must not block forever)."""
+    if not lease.enabled():
+        return ""
+    try:
+        cur = lease.Lease(g).read("FOREMAN_LLM_SWITCH")
+    except Exception:  # noqa: BLE001 - unknown: do not block the factory on it
+        return ""
+    fresh = time.time() - float(cur.get("since") or 0) < 3 * 3600
+    return str(cur.get("target") or "") if fresh else ""
+
+
 def hand_off(g: Gitea, repo: str, n: int) -> str:
     """The tick never runs a step itself (scripts/lanes.py): it starts the item in its lane's own process, or leaves the
     command waiting when the lane is full. Quick answers (a refusal, /stop, a manual gate) are given right here."""
@@ -1007,6 +1020,8 @@ def hand_off(g: Gitea, repo: str, n: int) -> str:
     if quick:
         return process_inline(g, repo, n)
     lane = "local" if cmd.get("auto") else lanes.lane_of(opts.model or commands.DEFAULT_MODEL)
+    if lane == "local" and (pending := model_switch_pending(g)):
+        return f"queued: the local model is being switched to `{pending}` (/llm on the status issue)"
     if not lanes.has_room(STATE, lane):
         return f"queued: the {lane} lane is full ({lanes.describe(lanes.busy(STATE, lane))})"
     rec = lanes.spawn(STATE, app, n, lane, ["run", app, str(n)], marker.get("resume", "a step"),
@@ -1493,7 +1508,8 @@ def night_tick(g: Gitea) -> None:
             g.ensure_label(repo, night.LABEL, "#6366f1", "Night shift may pass the gates before the code (docs/night-shift.md)")
         STATE.mkdir(parents=True, exist_ok=True)
         made.write_text("\n".join(repos))
-    if NIGHT["taken"] or not night.in_window(now) or (lanes.enabled() and not lanes.has_room(STATE, "local")):
+    if (NIGHT["taken"] or not night.in_window(now) or (lanes.enabled() and not lanes.has_room(STATE, "local"))
+            or model_switch_pending(g)):
         return
     for repo in repos:
         for i in g.paged(f"/repos/{repo}/issues?state=open&type=issues&labels={night.LABEL}"):
