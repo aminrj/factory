@@ -311,12 +311,15 @@ def files_section(ctx: Ctx, resume: str) -> str:
 
 
 def checkpoint(ctx: Ctx, label: str, title: str, body: str, resume: str, stop: str = "", extra: str = "",
-               rework: bool = False) -> None:
+               rework: bool = False, reply: str = "") -> None:
     refresh_board()
     extra = ";".join(x for x in (extra, "rework=ok" if rework else "") if x)
     marker = f"<!--factory:resume={resume};stop={stop}{';' + extra if extra else ''}-->"
-    reply = ("Reply `/go` to accept, `/rework <what is wrong>` to send it back, or `/stop` to stop."
-             if rework else "Reply `/go` to continue or `/stop` to stop.")
+    # The last line says what each command does HERE: a `/go` that can only answer "a session is needed" was offered
+    # at checkpoint 4b, and the owner sent it five times (brevkoll#19, 2026-11-22).
+    reply = reply or ("Reply `/go` to accept, `/rework <what is wrong>` to send it back, or `/stop` to stop." if rework
+                      else "Nothing here for `/go` to run: this needs a session. `/stop` ends the item."
+                      if resume == "manual" else "Reply `/go` to continue or `/stop` to stop.")
     files = files_section(ctx, resume)
     text = (f"{CP_PREFIX} {label}: {title}\n\n{body}\n\n{files + chr(10) * 2 if files else ''}{ctx.status_line()}\n\n"
             f"{reply}\n{marker}")
@@ -795,12 +798,37 @@ def after_gate4(ctx: Ctx) -> None:
     log(f"{ctx.app}#{ctx.n}: merged PR #{pr['number']}, pushed main to github")
     checkpoint(ctx, "4b", "merged and mirrored; the release is not automated yet",
                f"PR #{pr['number']} is merged and `main` is on the GitHub mirror. The release steps (tag, image build, "
-               "trivy scan, registry push, deploy guide) are not in the foreman yet. Open a Claude Code session in "
-               "`~/git/software-factory` and say: run the release for brevkoll.", "manual")
+               f"trivy scan, registry push, deploy guide) are not in the foreman yet ({RELEASE_ISSUE}). To release now, "
+               f"open a Claude Code session in `~/git/software-factory` and say: run the release for {ctx.app}.",
+               "after_merge", reply=f"Reply `/go` to close this work item (the release waits in {RELEASE_ISSUE}), or "
+                                    "`/stop` to stop.")
+
+
+RELEASE_ISSUE = "factory#27"
+
+
+def after_merge(ctx: Ctx) -> None:
+    """Checkpoint 4b answered: the change is merged and mirrored, so the work item is done. The release is not
+    automated yet; the item is closed and the release is noted on the release issue, so nothing waits forever."""
+    when = datetime.now(UTC).strftime("%Y-%m-%d")
+    ctx.comment(f"{NOTICE_PREFIX} ✅ Done: merged and mirrored, closing this work item. The release (tag, image, scan, "
+                f"registry, deploy) is not automated yet and waits in {RELEASE_ISSUE}.")
+    try:
+        n27 = int(RELEASE_ISSUE.split("#")[1])
+        ctx.g.call("POST", f"/repos/{ctx.g.user}/factory/issues/{n27}/comments",
+                   {"body": f"{ctx.app}#{ctx.n} merged and mirrored on {when}; waits for a release."})
+    except Exception as e:  # noqa: BLE001 - a note elsewhere must never keep the item open
+        log(f"{ctx.app}#{ctx.n}: could not note the release: {type(e).__name__}")
+    ctx.g.call("PATCH", f"/repos/{ctx.repo}/issues/{ctx.n}", {"state": "closed"})
+    commit_ops(f"Done: {ctx.app}#{ctx.n}")
+    notify(f"{ctx.app}: done", f"{ctx.app}#{ctx.n} merged, mirrored and closed; release waits in {RELEASE_ISSUE}",
+           priority=2)
 
 
 def manual(ctx: Ctx) -> None:
-    ctx.comment(f"{CLAIM_PREFIX} Nothing automated is left for this gate. A session is needed.")
+    # a notice, not a claim: a claim would become the item's state and make it look busy forever
+    ctx.comment(f"{NOTICE_PREFIX} Nothing automated is left for this gate (comment {ctx.go_id}): a session is needed. "
+                "`/stop` ends the item.")
     notify(f"{ctx.app}: needs a session", f"{ctx.app}#{ctx.n} waits for a manual step", priority=4)
 
 
@@ -834,7 +862,8 @@ def after_staging_rework(ctx: Ctx) -> None:
 REWORK_HANDLERS = {"after_gate3": "after_plan_rework", "after_gate4": "after_staging_rework"}
 HANDLERS = {"after_gate1": after_gate1, "after_gate2": after_gate2, "after_research_questions": after_research_questions,
             "after_gate3": after_gate3, "after_timebox": after_timebox, "after_gate4": after_gate4, "manual": manual,
-            "after_staging_rework": after_staging_rework, "after_plan_rework": after_plan_rework}
+            "after_staging_rework": after_staging_rework, "after_plan_rework": after_plan_rework,
+            "after_merge": after_merge}
 LEGACY = {"1": "after_gate1", "2": "after_gate2", "2b": "after_research_questions", "3": "after_gate3",
           "4": "after_gate4", "T": "after_timebox"}
 
@@ -1004,6 +1033,9 @@ def process(g: Gitea, repo: str, n: int, dry: bool = False) -> str:
         ctx.comment(f"{CLAIM_PREFIX} I do not know what `/go` should run here (no resume marker). A session is needed.")
         notify(f"{app}: unclear checkpoint", f"{app}#{n} has no resume marker", priority=4)
         return "unknown"
+    if handler == "manual":  # nothing runs: answer with a notice so the checkpoint stays the state (no claim)
+        manual(ctx)
+        return "ran manual"
     if auto:
         ctx.comment(f"{CLAIM_PREFIX} 🌙 Night shift (label `{night.LABEL}`): no command from you, so I pass checkpoint "
                     f"`{night.checkpoint_label(pivot['body'])}` myself: {auto}. Running `{handler}` on model `local`. "

@@ -513,6 +513,32 @@ class GateTests(unittest.TestCase):
         self.mirror_push.assert_called_once()
         self.assertIn("CHECKPOINT 4b", self.bot())
 
+    def test_after_the_mirror_a_go_closes_the_item_instead_of_asking_for_a_session(self) -> None:
+        # brevkoll#19, 2026-11-22: checkpoint 4b offered `/go`, and five of them got "a session is needed"
+        self.checkpoint("after_gate4", "4")
+        self.g.closed_prs = [{**PR, "merged": True}]
+        self.g.open_prs = []
+        self.go()
+        cp = self.bot()
+        self.assertIn("Reply `/go` to close this work item", cp)
+        self.assertIn("resume=after_merge", cp)
+        closed: list[dict] = []
+        real_call = self.g.call
+        self.g.call = lambda m, path, body=None, **kw: (closed.append(body or {}) if m == "PATCH" and  # type: ignore[method-assign]
+                                                        path.endswith("/issues/1") else None) or real_call(m, path, body, **kw)
+        self.assertEqual(self.go("/go"), "ran after_merge")
+        self.assertIn({"state": "closed"}, closed)
+        self.assertTrue(any("Done: merged and mirrored" in c["body"] for c in self.g.comments))
+
+    def test_a_manual_gate_answers_with_a_notice_and_stays_at_its_checkpoint(self) -> None:
+        self.checkpoint("manual", "X")
+        self.assertEqual(self.go("/go"), "ran manual")
+        self.assertFalse(any(c["body"].startswith(orchestrate.CLAIM_PREFIX) for c in self.g.comments))
+        self.assertTrue(self.bot().startswith(orchestrate.NOTICE_PREFIX))
+        self.assertIsNone(orchestrate.decide(self.g, "owner/app", 1))  # the /go is answered, the checkpoint is still the state
+        self.g.comment("owner/app", 1, "/stop")
+        self.assertEqual(orchestrate.decide(self.g, "owner/app", 1)[2], "stop")  # type: ignore[index]
+
     def test_an_earlier_merged_pr_of_the_same_branch_does_not_count(self) -> None:
         # brevkoll#15: PR #16 was merged, a rework opened PR #18 on the same branch, and a /go at the review checkpoint
         # took #16 for the answer: the staged build was removed and "Merged on Gitea" was posted for an open PR
