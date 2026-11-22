@@ -1,13 +1,12 @@
 # Board
 
-_Generated 2026-11-22 16:57 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-22 17:54 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#14 | pick_up-retry: a step failed | 2026-11-22T16:31+00:00 | 0.4 |
-| brevkoll#7 | 2b: research raised questions | 2026-11-22T16:32+00:00 | 0.4 |
+| (nothing) | | | |
 
 ## idea
 
