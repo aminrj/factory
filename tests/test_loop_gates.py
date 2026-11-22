@@ -186,6 +186,28 @@ class GateTests(unittest.TestCase):
         notified = [c.args[0] for c in self.notify.call_args_list]
         self.assertFalse(any("checkpoint 3" in t for t in notified))  # no push for a gate nobody has to answer
 
+    def test_a_later_phase_with_nothing_left_goes_on_to_validation(self) -> None:
+        # brevkoll#32: the second implement run found everything built and declined; the item stopped for the owner
+        self.commit_file("spec.md", "# Spec\n\nStatus: draft\n")
+        self.checkpoint("after_gate1", "1")
+        self.agent_files.update({"threat-model": "| R1 | PROPOSED |\n", "research": "# R\n", "plan": PLAN})
+        real = self.fake_dispatch
+        implements = []
+
+        def dispatch(ctx: orchestrate.Ctx, step: str, note: str | None = None, note_kind: str = "ci") -> str:
+            if step == "implement":
+                implements.append(1)
+                if len(implements) == 2:
+                    self.dispatched.append((step, note))
+                    raise orchestrate.AgentDeclined("implement", "Phase 1 already covers everything.")
+            return real(ctx, step, note, note_kind)
+        with mock.patch.object(orchestrate, "dispatch", side_effect=dispatch):
+            self.assertEqual(self.go("/go"), "ran after_gate1")
+        self.assertEqual(self.steps()[-1], "validate")
+        cp = [c["body"] for c in self.g.comments if c["body"].startswith("🛑")][-1]
+        self.assertIn("CHECKPOINT 4", cp)
+        self.assertIn("found nothing left to build", cp)
+
     def test_the_autopilot_stops_at_cp3_for_a_plan_that_touches_risky_files(self) -> None:
         self.commit_file("spec.md", "# Spec\n\nStatus: draft\n")
         self.checkpoint("after_gate1", "1")

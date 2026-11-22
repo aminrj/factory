@@ -362,6 +362,12 @@ class LoopWarningTests(unittest.TestCase):
             )
         self.assertIn("refused", live.state["warning"])
 
+    def test_task_list_updates_are_not_a_loop(self) -> None:
+        live = self.live()
+        for i in range(12):
+            self.use(live, "TaskUpdate", {"taskId": str(i % 3), "status": "completed"})
+        self.assertEqual(live.state["warning"], "")
+
     def test_normal_work_raises_none(self) -> None:
         live = self.live()
         for i in range(12):

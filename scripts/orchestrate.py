@@ -442,8 +442,16 @@ def failing(result: dict[str, str], want: tuple[str, ...]) -> list[str]:
     return [w for w in want if result.get(w) != "success"]
 
 
+EMPTY_PHASE = re.compile(r"^\W*(none|n/?a|tbd|-+|nothing|empty)\W*$", re.IGNORECASE)
+
+
 def phases(plan: str) -> int:
-    return len(re.findall(r"^##\s+Phase\s+\d+", plan, re.MULTILINE))
+    """The phases to build: `## Phase N: <title>` headings before any `## Deferred`, without placeholders such as
+    `## Phase 2: (none)` (brevkoll#32, 2026-11-22: that heading started a second implement run that had nothing to do,
+    and the item stopped for the owner; #29's one-phase plan was announced as "2 phases" the same way)."""
+    body = re.split(r"^##\s+Deferred\b", plan, maxsplit=1, flags=re.MULTILINE | re.IGNORECASE)[0]
+    titles = re.findall(r"^##\s+Phase\s+\d+\b[ \t]*:?[ \t]*(.*)$", body, re.MULTILINE)
+    return sum(1 for t in titles if not EMPTY_PHASE.match(t))
 
 
 def open_questions(research: str) -> list[str]:
@@ -759,7 +767,19 @@ def build(ctx: Ctx) -> None:
             ctx.comment(f"{CLAIM_PREFIX} Timebox warning: {hours:.1f} h of {TIMEBOX_H:g} h used, "
                         f"{st.get('phases_done', 0)} of {n_ph} phases done.")
             notify(f"{ctx.app}: timebox 80%", f"{hours:.1f} h of {TIMEBOX_H:g} h used", priority=4)
-        out = dispatch(ctx, "implement")
+        try:
+            out = dispatch(ctx, "implement")
+        except AgentDeclined as e:
+            if st.get("phases_done", 0) < 1:
+                raise
+            # a later phase found nothing left to build: the earlier runs did it (brevkoll#32). Validation decides.
+            log(f"{ctx.app}#{ctx.n}: implement found nothing left after {st['phases_done']} phase(s); on to validation")
+            note_for_review(ctx, f"The plan listed {n_ph} phases; after phase {st['phases_done']} the agent found "
+                                 f"nothing left to build and said: {str(e)[-400:].strip()}")
+            st = ctx.state()
+            st["phases_done"] = n_ph
+            ctx.save(st)
+            break
         # Count the phase as soon as its commit exists. If CI is red and the rework run fails, a retry must not
         # dispatch another implement run for a phase that is already built (it would make no commit and fail).
         st["phases_done"] = st.get("phases_done", 0) + 1

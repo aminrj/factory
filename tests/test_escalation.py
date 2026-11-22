@@ -178,3 +178,16 @@ class StopNowTests(unittest.TestCase):
         self.assertEqual(posted[0][1], "after_gate3-stopped")
         self.assertIn("comment 1262", posted[0][3])
         self.assertEqual(posted[0][4], "after_gate3")  # `/go` runs the step again
+
+
+class PhaseCountTests(unittest.TestCase):
+    def test_placeholder_and_deferred_phases_are_not_built(self) -> None:
+        plan = (
+            "# Plan\n\n## Phase 1: read the version\n\nx\n\n## Phase 2: (none)\n\n## Phase 3: -\n\n"
+            "## Deferred\n\n## Phase 4: later\n"
+        )
+        self.assertEqual(orchestrate.phases(plan), 1)
+        self.assertEqual(orchestrate.phases("## Phase 1: a\n## Phase 2: b\n"), 2)
+        self.assertEqual(
+            orchestrate.phases("## Phase 1\n"), 1
+        )  # a heading without a title still counts

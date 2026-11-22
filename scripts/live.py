@@ -23,6 +23,7 @@ RECENT = 80  # entries kept for the board: the agent's words, its thinking, its 
 RESULT_LINES = 6  # first lines of each tool result shown on the board (the .log file keeps it all)
 WRITE_EVERY_S = 2.0
 LOOP_WINDOW, LOOP_SAME, LOOP_RUN, LOOP_REFUSED = 12, 5, 10, 6
+BOOKKEEPING = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch"}
 
 
 def short(text: str, limit: int = 160) -> str:
@@ -150,6 +151,8 @@ class Live:
         """brevkoll#7 (2026-11-22): 62 `ListAgents` calls in a row, and before that the same denied `cat` again and
         again. The same call LOOP_SAME times among the last LOOP_WINDOW, or one tool LOOP_RUN times in a row, raises a
         warning: the board shows it and dispatch.py interrupts the run for an early retrospective."""
+        if name in BOOKKEEPING:  # task list updates and tool loading repeat by nature (brevkoll#32: false warnings)
+            return
         self._calls = (self._calls + [what])[-max(LOOP_WINDOW, LOOP_RUN):]
         recent = self._calls[-LOOP_WINDOW:]
         same = max((recent.count(c) for c in set(recent)), default=0)
