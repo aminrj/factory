@@ -75,3 +75,5 @@
 {"ts": "2026-11-23T19:27:44+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 4.7, "comment_id": 1455}
 {"ts": "2026-11-23T19:36:20+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 1.2, "comment_id": 1473}
 {"ts": "2026-11-23T19:50:24+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 5.7, "comment_id": 1491}
+{"ts": "2026-11-23T19:58:00+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "after_gate4", "answer": "rework", "wait_min": 2.0, "comment_id": 1506}
+{"ts": "2026-11-23T19:58:00+00:00", "repo": "brevkoll", "issue": 6, "checkpoint": "after_gate4", "answer": "stop", "wait_min": 1315.9, "comment_id": 1507}

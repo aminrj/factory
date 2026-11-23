@@ -97,3 +97,5 @@
 {"ts": "2026-11-23T19:43:06Z", "repo": "brevkoll", "issue": 36, "step": "validate", "duration_s": 153.4, "cost_usd": 0.2273, "turns": 40, "is_error": false, "fallback": false, "model": "local", "retros": 0, "notional_cost_usd": 0.719406, "cost_basis": "fast-equivalent", "energy_kwh": 0.017}
 {"ts": "2026-11-23T19:51:14Z", "repo": "brevkoll", "issue": 36, "step": "implement", "duration_s": 50.0, "cost_usd": 0.1338597, "turns": 12, "is_error": false, "fallback": false, "model": "fast", "retros": 0}
 {"ts": "2026-11-23T19:53:46Z", "repo": "brevkoll", "issue": 36, "step": "validate", "duration_s": 89.8, "cost_usd": 0.2112041, "turns": 24, "is_error": false, "fallback": false, "model": "fast", "retros": 0}
+{"ts": "2026-11-23T19:59:21Z", "repo": "brevkoll", "issue": 36, "step": "implement", "duration_s": 80.3, "cost_usd": 0.18805899999999998, "turns": 21, "is_error": false, "fallback": false, "model": "fast", "retros": 0}
+{"ts": "2026-11-23T20:01:55Z", "repo": "brevkoll", "issue": 36, "step": "validate", "duration_s": 92.0, "cost_usd": 0.22914970000000004, "turns": 27, "is_error": false, "fallback": false, "model": "fast", "retros": 0}
