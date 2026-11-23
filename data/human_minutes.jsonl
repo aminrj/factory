@@ -51,3 +51,4 @@
 {"ts": "2026-11-23T19:09:22+00:00", "repo": "brevkoll", "issue": 36, "gate": "spec", "minutes": 0, "source": "auto", "comment_id": 1406}
 {"ts": "2026-11-23T19:13:59+00:00", "repo": "brevkoll", "issue": 36, "gate": "plan_review", "minutes": 0, "source": "auto", "comment_id": 1406}
 {"ts": "2026-11-23T19:27:44+00:00", "repo": "brevkoll", "issue": 36, "gate": "rework", "minutes": 5, "source": "default", "comment_id": 1455}
+{"ts": "2026-11-23T19:36:20+00:00", "repo": "brevkoll", "issue": 36, "gate": "rework", "minutes": 5, "source": "default", "comment_id": 1473}
