@@ -1,0 +1,10 @@
+[Unit]
+Description=Factory hygiene: weekly image vulnerability watch and template sync
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v24.14.1/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/git/software-factory/factory
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/image_watch.py
+ExecStart=/usr/bin/python3 -I %h/git/software-factory/factory/scripts/template_sync.py
+TimeoutStartSec=3h

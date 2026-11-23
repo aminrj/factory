@@ -93,6 +93,20 @@ class FlowTests(unittest.TestCase):
             self.go()
         self.assertIn("CHECKPOINT 5-fix: no release candidate", self.bot())
         self.assertIn("resume=release_candidate", self.bot())
+        self.assertIn("Tried at", self.bot())  # a retry that gets the same answer must look like a retry
+        self.assertIn("You can still test this build", self.bot())
+        self.assertIn("http://box.example.com:8800/", self.bot())
+        self.assertIn("not a release candidate", self.bot())
+
+    def test_a_refusal_whose_staging_also_fails_says_so_in_one_line(self) -> None:
+        self.merged()
+        failed = mock.Mock(returncode=1, stdout="", stderr="STAGING FAILED: main is not green")
+        with mock.patch.dict(os.environ, {"FACTORY_RELEASES": "on"}), mock.patch.object(
+                orchestrate, "release_call", side_effect=orchestrate.NeedsHuman("RELEASE REFUSED: x")), mock.patch.object(
+                orchestrate, "stage_call", return_value=failed):
+            self.go()
+        self.assertIn("could not stage `main` for testing either", self.bot())
+        self.assertIn("main is not green", self.bot())
 
     def test_the_night_shift_never_accepts_a_release(self) -> None:
         import night

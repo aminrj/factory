@@ -75,6 +75,25 @@ on a cloud model is told the file exists and is not given it: the file is your p
 when an agent must read it. When an agent says it could not reproduce a problem, its comment says so first ("its change is
 a guess") instead of looking like any other green step.
 
+## Weekly hygiene: vulnerabilities and the template (`factory-hygiene.timer`, Monday 05:30)
+
+Two jobs run before a release can be refused or an app can fall behind (brevkoll#36, 2026-11-23):
+
+- **`image_watch.py`** builds every app's `main` from scratch and scans it, with the same code as the release gate. Nothing
+  fixable: it records the counts in `data/image_watch.jsonl`. Fixable findings: it tries `apt-get upgrade` in the runtime
+  stage, then a newer digest of the base image, builds and scans again after each, and opens a PR only when the number went
+  down. If neither helps it opens one issue labelled `bug` and `security` naming the packages (not twice for the same set).
+- **`template_sync.py`** compares the paths in the template's `.factory/template.json` (agent commands, document templates,
+  scripts) with each app and opens one PR per app for what differs. An app keeps a file on purpose by listing it in
+  `.factory/template-exceptions`.
+
+Both commit as `factory-orchestrator` and never merge. The unit tests use a fake Gitea, so after changing either job run
+`python3 -I scripts/selftest_hygiene.py`: it creates a private throwaway repo, runs both jobs against the real Gitea with an
+injected scan result, checks the branch, author, PR, labels, deduplication and mergeability through the API, and deletes
+the repo (20 checks). Install the timer on the host that runs the foreman:
+`ops/install-timers.sh` (it needs Docker, like a release). Not covered yet: Python dependency updates (Renovate needs a bot
+account and token, see `renovate.md`).
+
 ## Two environments, one image
 
 - **Staging is a container on the devbox.** At CP4 it runs the pull request's code; at CP5 it runs the release

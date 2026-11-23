@@ -1055,6 +1055,32 @@ def release_call(*args: str) -> str:
     return res.stdout
 
 
+def main_sha(ctx: Ctx) -> str:
+    try:
+        sh("git", "fetch", "-q", "origin", "main", cwd=ctx.clone)
+        return sh("git", "rev-parse", "--short", "origin/main", cwd=ctx.clone)
+    except subprocess.CalledProcessError:
+        return "?"
+
+
+def unreleased_stage(ctx: Ctx) -> str:
+    """A refused release must not leave nothing to try (brevkoll#36: three `/go` in a row, each answered by the same
+    refusal, and no way to see the fixed build). Stage `main` for testing and say plainly that it is not a release. Never
+    raises: a staging problem is one line."""
+    try:
+        res = stage_call("up", ctx.app, "--ref", "main")
+    except subprocess.TimeoutExpired:
+        return "### Testing\n\nStaging `main` timed out, so there is no build to try yet."
+    if res.returncode != 0:
+        why = (res.stderr or res.stdout).strip().splitlines()[-1:] or ["unknown"]
+        return f"### Testing\n\nI could not stage `main` for testing either: `{why[0][:200]}`"
+    info = json.loads(res.stdout)
+    return (f"### 🧪 You can still test this build\n\n**[Open `main` ({info['sha'][:7]})]({info['url']})**"
+            f" (if the name does not resolve: [http://{info['ip']}:{info['port']}/](http://{info['ip']}:{info['port']}/)). "
+            "It is **not a release candidate**: it failed the release gate, so it is not tagged, not in the registry and "
+            "not what would go to Kubernetes. Use it to check the change works.")
+
+
 def release_candidate(ctx: Ctx) -> None:
     """Stage 6 and 7 (docs/lifecycle.md): build, scan and push the image of main, run that image on the devbox, and ask
     the owner to accept it at Checkpoint 5. A refused candidate (red main, fixable findings) says why and can be retried."""
@@ -1063,7 +1089,9 @@ def release_candidate(ctx: Ctx) -> None:
         rc = json.loads(release_call("candidate", ctx.app))
     except NeedsHuman as e:
         checkpoint(ctx, "5-fix", "no release candidate",
-                   f"{e}\n\nFix it with a new change, then reply `/go` to build the candidate again, or `/stop`.",
+                   f"Tried at {datetime.now(UTC):%H:%M}Z on `main` {main_sha(ctx)}.\n\n{e}\n\n{unreleased_stage(ctx)}\n\n"
+                   "Reply `/go` to run the release gate again (it builds from scratch and scans; a merge in this repo or in "
+                   "the factory reaches the foreman within a minute, so `/go` after the merge), or `/stop`.",
                    "release_candidate")
         return
     f = rc["findings"]
