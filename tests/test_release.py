@@ -34,6 +34,20 @@ class PureTests(unittest.TestCase):
         self.assertEqual(release.scan_counts(report), {"fixed": 1, "unfixed": 1, "critical": 1})
 
 
+    def test_the_fixable_packages_are_named_once_each(self) -> None:
+        v = {"Severity": "HIGH", "PkgName": "libkrb5-3", "InstalledVersion": "1.21.3-5+deb13u1", "FixedVersion": "1.21.3-5+deb13u2"}
+        report = {"Results": [{"Vulnerabilities": [v, {**v, "VulnerabilityID": "other"}, {**v, "PkgName": "a", "Severity": "LOW"},
+                                                   {"Severity": "HIGH", "PkgName": "unfixed"}]}]}
+        self.assertEqual(release.fixable_packages(report), ["libkrb5-3 1.21.3-5+deb13u1 -> 1.21.3-5+deb13u2"])
+
+    def test_a_release_is_always_built_without_the_cache_and_with_a_fresh_base(self) -> None:
+        cmd = release.build_command(["r/app:v1", "r/app:sha-abc"])
+        self.assertEqual(cmd[:2], ["docker", "build"])
+        self.assertIn("--no-cache", cmd)
+        self.assertIn("--pull", cmd)
+        self.assertEqual(cmd[-5:], ["-t", "r/app:v1", "-t", "r/app:sha-abc", "-"])
+
+
 class FlowTests(unittest.TestCase):
     setUp = tlg.GateTests.setUp
     fake_dispatch = tlg.GateTests.fake_dispatch

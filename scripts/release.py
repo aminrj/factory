@@ -27,6 +27,7 @@ import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -74,7 +75,25 @@ def scan_counts(report: dict) -> dict[str, int]:
     return out
 
 
-def scan(image: str, sbom_path: Path) -> dict[str, int]:
+def fixable_packages(report: dict, limit: int = 6) -> list[str]:
+    """`package installed -> fixed` for the HIGH/CRITICAL findings that have a fix, once per package, to name them."""
+    seen: dict[str, str] = {}
+    for result in report.get("Results") or []:
+        for v in result.get("Vulnerabilities") or []:
+            if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion"):
+                seen.setdefault(v.get("PkgName", "?"), f"{v.get('PkgName', '?')} {v.get('InstalledVersion', '?')} -> "
+                                f"{str(v['FixedVersion']).split(',')[0].strip()}")
+    return sorted(seen.values())[:limit]
+
+
+def build_command(refs: list[str]) -> list[str]:
+    """A release is built from scratch. A cached `apt-get install` layer keeps the packages of the day it was first built:
+    brevkoll#36 (2026-11-23) was refused for 56 fixable findings in four krb5 libraries that a build without the cache
+    did not have at all. Staging builds (stage.py) may use the cache; the image that reaches production may not."""
+    return ["docker", "build", "-q", "--pull", "--no-cache", *[x for r in refs for x in ("-t", r)], "-"]
+
+
+def scan(image: str, sbom_path: Path) -> dict[str, Any]:
     with tempfile.TemporaryDirectory() as tmp:
         tar = Path(tmp) / "image.tar"
         sh("docker", "save", "-o", str(tar), image)
@@ -85,7 +104,7 @@ def scan(image: str, sbom_path: Path) -> dict[str, int]:
         report = json.loads(sh(*base, "--severity", "HIGH,CRITICAL", "--format", "json") or "{}")
         sbom_path.parent.mkdir(parents=True, exist_ok=True)
         sbom_path.write_text(sh(*base, "--format", "cyclonedx"))
-    return scan_counts(report)
+    return {**scan_counts(report), "packages": fixable_packages(report)}
 
 
 def push(g: Gitea, refs: list[str]) -> str:
@@ -129,12 +148,15 @@ def candidate(g: Gitea, app: str, now: datetime | None = None) -> dict:
     name = f"{registry_host(g)}/{g.user}/{app}"
     refs = [f"{name}:{version}", f"{name}:sha-{sha[:7]}"]
     archive = subprocess.run(["git", "archive", sha], cwd=clone, capture_output=True, check=True).stdout
-    sh("docker", "build", "-q", "-t", refs[0], "-t", refs[1], "-", stdin=archive)
+    sh(*build_command(refs), stdin=archive)
     sbom = STATE / "releases" / app / f"{version}.cdx.json"
     findings = scan(refs[0], sbom)
     if findings["fixed"]:
-        raise ReleaseRefused(f"{findings['fixed']} HIGH/CRITICAL findings have a fix available: update the base image or "
-                             "the packages, then release again. Nothing was pushed.")
+        raise ReleaseRefused(
+            f"{findings['fixed']} HIGH/CRITICAL findings have a fix available, in a build made without any cache: "
+            + "; ".join(findings["packages"]) + ". The pinned base image is behind the distribution's security repository: "
+            "add `apt-get upgrade -y` to the Dockerfile's runtime stage (the template has it) or bump the base image digest in "
+            "a new change, merge it, then `/go`. Nothing was pushed.")
     digest = push(g, refs)
     staged = stage.up(app, ref=sha, image=refs[0])
     previous = sh("git", "describe", "--tags", "--abbrev=0", "--match", "v*", f"{sha}^", cwd=clone, check=False)
