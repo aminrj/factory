@@ -1,18 +1,19 @@
 # Board
 
-_Generated 2026-11-22 22:01 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-23 19:10 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 2.9 |
-| brevkoll#6 | after_gate3-interrupted: the foreman stopped while running a | 2026-11-22T21:56+00:00 | 0.1 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 24.0 |
+| brevkoll#6 | 4: try it, review and merge | 2026-11-22T22:01+00:00 | 21.1 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
+| The application returns "The model returned an unusable answer." even after sending a correct pdf file with a Swedish letter in it | brevkoll#36 |
 | Support a model endpoint that needs a client certificate (mutual TLS) | brevkoll#14 |
 
 ## spec-ready
