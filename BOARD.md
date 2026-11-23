@@ -1,13 +1,14 @@
 # Board
 
-_Generated 2026-11-23 19:14 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-23 19:22 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 24.1 |
-| brevkoll#6 | 4: try it, review and merge | 2026-11-22T22:01+00:00 | 21.2 |
+| brevkoll#36 | after_gate3-interrupted: the foreman stopped while running a | 2026-11-23T19:14+00:00 | 0.1 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 24.2 |
+| brevkoll#6 | 4: try it, review and merge | 2026-11-22T22:01+00:00 | 21.3 |
 
 ## idea
 
