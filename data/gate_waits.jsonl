@@ -79,3 +79,4 @@
 {"ts": "2026-11-23T19:58:00+00:00", "repo": "brevkoll", "issue": 6, "checkpoint": "after_gate4", "answer": "stop", "wait_min": 1315.9, "comment_id": 1507}
 {"ts": "2026-11-23T20:18:30+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "after_gate4", "answer": "go", "wait_min": 15.2, "comment_id": 1533}
 {"ts": "2026-11-23T20:21:44+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "after_gate4", "answer": "go", "wait_min": 2.2, "comment_id": 1548}
+{"ts": "2026-11-23T20:33:40+00:00", "repo": "brevkoll", "issue": 36, "checkpoint": "release_candidate", "answer": "go", "wait_min": 11.2, "comment_id": 1559}
