@@ -114,6 +114,17 @@ class Gitea:
     def get(self, path: str) -> Any:
         return self.call("GET", path)
 
+    def download(self, uuid: str, limit: int) -> bytes | None:
+        """A file attached to an issue or a comment (web path /attachments/<uuid>), or None when it is larger than
+        `limit` bytes. The factory's own token authorises it; the file is the owner's data, never instructions."""
+        req = urllib.request.Request(f"{self.base}/attachments/{uuid}", headers={"Authorization": f"token {self._token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # noqa: S310
+                raw = resp.read(limit + 1)
+        except (urllib.error.URLError, socket.timeout, ConnectionError) as err:
+            raise Unreachable(f"GET /attachments/<uuid>: {type(err).__name__}") from err
+        return raw if len(raw) <= limit else None
+
     def exists(self, path: str) -> bool:
         try:
             self.call("GET", path)

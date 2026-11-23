@@ -67,6 +67,14 @@ refuses a spec whose criteria have none; after validate it writes `acceptance.md
 and a run that adds a test file pytest would never collect (a name that does not start with `test_`, or a folder outside
 the app's `testpaths`) is refused.
 
+## Files you attach to an issue
+
+A file attached to the issue or to one of your comments (a letter that fails, a log, a screenshot) is handed to a run on
+the **local model** as `.attachments/<where>-<name>` in the agent's folder, kept out of git, up to five files of 5 MB. A run
+on a cloud model is told the file exists and is not given it: the file is your private data, so send `/rework model=local`
+when an agent must read it. When an agent says it could not reproduce a problem, its comment says so first ("its change is
+a guess") instead of looking like any other green step.
+
 ## Two environments, one image
 
 - **Staging is a container on the devbox.** At CP4 it runs the pull request's code; at CP5 it runs the release
