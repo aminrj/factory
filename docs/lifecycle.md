@@ -16,12 +16,12 @@ spec pasted ─▶ spec ─▶ threat model ─▶ plan ─▶ build (phases + C
 |---|---|---|---|---|
 | 0 | **Start** | Open an issue in the factory repo with the label `new-app`, the app name as the title and your spec as the body. The foreman creates the repo from `factory-template` (or fills an empty repo you created), commits your spec as `Status: draft`, and an agent drafts the holdout tests from it. | paste the spec | planned (today: `scripts/new_app.py <app> "<description>" --seed <folder>` from a session) |
 | 0b | **Start a change** | On an app that exists: write an issue, comment `/go`. An agent drafts the spec and the acceptance tests from it. | write the issue, `/go` | works |
-| 1 | **Spec** | Spec and holdout tests on the branch, WIP pull request. Broken or already-passing tests are drafted again. | nothing (your starting `/go` approves it); `/go stop=spec` makes this CP1 | works |
+| 1 | **Spec** | Spec and holdout tests on the branch, WIP pull request. Broken or already-passing tests are drafted again. The spec names the goal it serves and the invariants it touches (`Serves:`, `Touches:` in its Intent section). If the issue itself says a choice is open, the spec says `Decision needed ... : yes` and the foreman stops once, before any code. | nothing (your starting `/go` approves it); `/go <your choice>` answers a held decision; `/go stop=spec` makes this CP1 | works |
 | 2 | **Threat model** | An agent drafts it; rows are accepted provisionally and listed at CP4. | nothing | works |
 | 2b | **Questions** | Research may raise questions; the planner defers them and CP4 lists them. | nothing | works |
 | 3 | **Plan** | An agent writes the plan in phases. A plan that touches risky files stops here as CP3. | nothing; `/go stop=plan` makes this CP3 (`/go` to build, or `/rework <note>`) | works |
 | 4 | **Build and test** | One agent run per phase with local checks and self-fix, retrospectives every 25 turns, a failed local step tried once on Claude, CI; then a validation report. | nothing; `/steer <note>` or `/stop` while a step runs | works |
-| 5 | **CP4 review on staging** | The pull request's head runs **as a container on the devbox**; the checkpoint links it (phone and PC). | try it, read the diff, merge, or `/rework` | works |
+| 5 | **CP4 review on staging** | The pull request's head runs **as a container on the devbox**; the checkpoint links it (phone and PC) and leads with the **drift report**: what was asked, what was built, and every place the diff leaves the spec or the plan (see below). | try it, read the diff, merge, or `/rework` | works |
 | 6 | **Release candidate** | After your merge: the foreman builds the image from `main` on the devbox, scans it (vulnerabilities, SBOM), tags it `v<date>.<n>` and pushes it to the Gitea container registry. It then runs **that exact image** as a container on the devbox, the same image that would go to production. | nothing | built (factory#84) |
 | 7 | **CP5 accept the release** | The checkpoint links the candidate on the devbox, the scan summary and what changed since the last release. | try it; `/go` accepts it, `/rework <what>` sends it back | built (factory#84) |
 | 8 | **Deploy** | Only after CP5: the foreman opens a pull request in the GitOps repo. The first time, it is the app's overlay (namespace, host name, NetworkPolicy, ExternalSecret, the Argo CD application); later releases only change the image tag. The app's secrets are written to Key Vault by the factory. | merge the GitOps PR: **that merge is the deploy** | planned |
@@ -30,6 +30,22 @@ spec pasted ─▶ spec ─▶ threat model ─▶ plan ─▶ build (phases + C
 
 Every stage runs on the local model unless you write `model=smart|fast|cheap`. Label an issue `night/ok` and the
 night shift does the same on the local model at night (see [night-shift.md](night-shift.md)); CP4, CP5 and the deploy are always yours.
+
+## Intent, architecture and the drift report
+
+The per-issue files (`thoughts/N/`) are disposable. Two files per app are not, and you write them: `docs/intent.md`
+(who it is for, goals `G<n>`, what it must never do `N<n>`) and `docs/architecture.md` (the picture, where the data
+goes, invariants `I<n>`, each enforced by a test carrying `# I<n>`; `scripts/trace.py` fails CI otherwise). Agents read
+them and never edit `intent.md`. Spec and plan cite them (`Serves:`, `Touches:`), and a change that moves a box or an
+invariant updates `architecture.md` in the same pull request.
+
+After the validate step the foreman runs the app's `scripts/drift.py`, which writes `thoughts/N/drift.md` from the
+spec, the plan and the diff, with no model involved: files changed but not in the plan, acceptance criteria whose only
+test is a same-named one from an older issue, test files pytest never collects, weakened checks, dependencies the plan
+did not name, a missing `acceptance.md`. CP4 quotes its headline (`Drift: CLEAN` or `REVIEW (k)`) and its findings
+before anything else. The validation report is still written by a model and is only read second.
+
+`doctor.py` warns when an app's agent commands or document templates are behind `factory-template`'s.
 
 ## Two environments, one image
 

@@ -160,6 +160,38 @@ def check_kit() -> None:
         else "the kit holds no second copy of the code", "delete it; the factory and factory-template repos are the source")
 
 
+SHARED_WITH_TEMPLATE = (".claude/commands", ".factory/templates")
+APP_OWN_TEMPLATES = {"threat-model.md"}  # an app may keep its own rows here
+
+
+def template_drift(template: Path, app: Path) -> list[str]:
+    """Files of the template's agent commands and document templates that an app lacks or holds an older copy of.
+    brevkoll's validate.md was one release behind: it never told the agent to write acceptance.md, so every staged build
+    showed the generic phone checklist (2026-11-22)."""
+    out = []
+    for folder in SHARED_WITH_TEMPLATE:
+        for f in sorted((template / folder).glob("*.md")) if (template / folder).is_dir() else []:
+            if f.name in APP_OWN_TEMPLATES and folder.endswith("templates"):
+                continue
+            mine = app / folder / f.name
+            if not mine.exists():
+                out.append(f"{folder}/{f.name} (missing)")
+            elif mine.read_bytes() != f.read_bytes():
+                out.append(f"{folder}/{f.name}")
+    return out
+
+
+def check_apps_follow_template() -> None:
+    template = stage.WORK / "factory-template"
+    for app in sorted(p for p in stage.WORK.iterdir() if (p / ".factory" / "templates").is_dir() and p != template):
+        if not template.is_dir():
+            return
+        behind = template_drift(template, app)
+        say("WARN" if behind else "ok", f"{app.name} differs from factory-template in: {', '.join(behind[:6])}" if behind
+            else f"{app.name} follows factory-template's commands and templates",
+            "copy the template's file into the app in a pull request (or say why the app differs)")
+
+
 def unit_problem(unit: str, runtime: Path, systemd_dir: Path) -> str | None:
     """A timer must be linked from the runtime repo's ops/systemd, not from a copy somewhere else."""
     link = systemd_dir / unit
@@ -202,6 +234,7 @@ def main(argv: list[str]) -> int:
     check_runtime()
     check_hooks("--install-hooks" in argv)
     check_kit()
+    check_apps_follow_template()
     check_unit_sources()
     check_gitea()
     fails = sum(1 for lvl, *_ in results if lvl == "FAIL")

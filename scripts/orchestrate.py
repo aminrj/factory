@@ -31,6 +31,7 @@ import urllib.request
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import IO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import commands  # noqa: E402
@@ -598,8 +599,21 @@ def set_autopilot(ctx: Ctx, stop: str | None) -> None:
     ctx.save(st)
 
 
+DECISION_NEEDED = re.compile(r"Decision needed[^:\n]*:\s*`?yes\b", re.IGNORECASE)
+
+
 def after_gate1(ctx: Ctx) -> None:
     spec = ctx.branch_file("spec.md")
+    st = ctx.state()
+    if DECISION_NEEDED.search(spec) and not st.get("decision_asked"):
+        # The issue itself says a choice is open (brevkoll#6: "Needs a decision before any code"). The autopilot used to
+        # pick an option for the owner. Ask once; the owner's reply is read by the later steps like any comment.
+        st["decision_asked"] = True
+        ctx.save(st)
+        raise NeedsHuman(
+            f"The [spec]({ctx.file_link('spec.md')}) says a decision is needed before any code, and lists the options. "
+            "Answer with `/go <your choice, in a sentence>`: your sentence is kept on the issue and every later step "
+            "reads it. `/go` alone builds what the spec assumes. `/stop` drops it.")
     holes = sorted(set(PLACEHOLDER.findall(spec)))
     if holes:
         raise NeedsHuman("`spec.md` still has template placeholders: " + ", ".join(f"`{h}`" for h in holes[:6])
@@ -866,7 +880,9 @@ def staging_block(ctx: Ctx) -> str:
     try:
         checklist = ctx.branch_file("acceptance.md").strip()
     except StepFailed:
-        checklist = "- [ ] Try the main flow from the spec on your phone\n- [ ] Try one failure case"
+        checklist = ("- [ ] Try the main flow from the spec on your phone\n- [ ] Try one failure case\n\n"
+                     "_(No `acceptance.md` was written for this change, so this list is generic: read the spec's "
+                     "acceptance criteria.)_")
     local = (f"On the PC that hosts it, use [{info['local_url']}]({info['local_url']}) (a Windows browser cannot reach the "
              "tailnet address of its own machine; the request just hangs)." if info.get("local_url") else "")
     return (f"### 🧪 Try it on your phone\n\n**[Open the staged build]({info['url']})**"
@@ -875,6 +891,33 @@ def staging_block(ctx: Ctx) -> str:
             f"`{info.get('host') or 'the factory host'}`. Only devices on your tailnet can open it. "
             f"Model check before staging: {info.get('model', 'unknown')}. The model is shared and can be busy or off.\n\n"
             f"{local + chr(10) * 2 if local else ''}{checklist}")
+
+
+def drift_summary(report: str, link: str) -> str:
+    """The checkpoint's view of thoughts/N/drift.md (written by the app's scripts/drift.py after validate): the headline,
+    what was asked and built, and each finding. The owner reads this first: it is what the code says about the
+    distance between the intent and the diff, not what a model says about its own work."""
+    head = re.search(r"(?m)^Drift:\s*(.+)$", report)
+    card = re.search(r"(?ms)^## Card\s*\n(.*?)(?=^## )", report)
+    found = re.search(r"(?ms)^## Findings\s*\n(.*?)(?=^## |\Z)", report)
+    verdict = head.group(1).strip() if head else "unknown"
+    icon = "✅" if verdict.startswith("CLEAN") else "🔎"
+    out = [f"### {icon} What was asked, what was built (code, not the model): {verdict}"]
+    if card and card.group(1).strip():
+        out.append(card.group(1).strip())
+    items = [x.strip() for x in (found.group(1) if found else "").splitlines() if re.match(r"\s*\d+\.\s", x)]
+    if items:
+        out.append("\n".join(items[:8]) + (f"\n_… and {len(items) - 8} more in the report._" if len(items) > 8 else ""))
+    out.append(f"Full report: {link}")
+    return "\n\n".join(out)
+
+
+def drift_block(ctx: Ctx) -> str:
+    try:
+        return drift_summary(ctx.branch_file("drift.md"), ctx.file_link("drift.md")) + "\n\n"
+    except StepFailed:
+        return ("### What was asked, what was built\n\nNo drift report: this app has no `scripts/drift.py`, so nothing "
+                "compared the diff with the spec and the plan except the model's own validation report.\n\n")
 
 
 def stage_down(app: str) -> None:
@@ -913,7 +956,7 @@ def validate_and_checkpoint(ctx: Ctx) -> None:
     title = re.sub(r"^WIP:\s*", "", pr["title"])
     ctx.g.call("PATCH", f"/repos/{ctx.repo}/pulls/{pr['number']}", {"title": title, "body": body})
     checkpoint(ctx, "4", "try it, review and merge",
-               f"{night_note(ctx)}{autopilot_summary(ctx)}All four checks are green on PR #{pr['number']}: {pr['html_url']}\nValidation report: "
+               f"{night_note(ctx)}{autopilot_summary(ctx)}{drift_block(ctx)}All four checks are green on PR #{pr['number']}: {pr['html_url']}\nValidation report: "
                f"{ctx.file_link('validation.md')}\n\n{staging_block(ctx)}\n\n---\nThen read the full diff and merge "
                f"it yourself (I removed `WIP:` and filled the minutes table). Reply `/go` after the merge and I "
                f"will push `main` to the GitHub mirror and remove the staged build. If something is wrong, reply "
@@ -1317,13 +1360,22 @@ def hand_off(g: Gitea, repo: str, n: int) -> str:
     return f"started in the {lane} lane"
 
 
-def process_inline(g: Gitea, repo: str, n: int) -> str:
-    app = repo.split("/")[1]
+def take_item_lock(app: str, n: int) -> IO[str] | None:
+    """The item's lock, or None when a process holds it. Whoever runs steps for an item holds it for the whole run
+    (every autopilot hop included), so that no tick mistakes a live run for a dead one."""
     STATE.mkdir(exist_ok=True)
     lock = (STATE / f"{app}-{n}.lock").open("w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
+        return None
+    return lock
+
+
+def process_inline(g: Gitea, repo: str, n: int) -> str:
+    app = repo.split("/")[1]
+    lock = take_item_lock(app, n)
+    if lock is None:
         return "busy"
     d = decide(g, repo, n)  # again, now that we hold the lock
     if d is None:
@@ -1716,6 +1768,8 @@ def recover_interrupted(g: Gitea, repo: str, n: int) -> bool:
     answer, instead of leaving the item silent. The lock is held for exactly as long as a process is running the item."""
     app = repo.split("/")[1]
     STATE.mkdir(exist_ok=True)
+    if lanes.item_running(STATE, app, n):
+        return False  # a lane's child is running it (an `adopt` child holds no item lock: brevkoll#6, 2026-11-22)
     lock = (STATE / f"{app}-{n}.lock").open("w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1768,6 +1822,10 @@ def main() -> None:
                 if a.cmd == "run":
                     print(process(g, f"{g.user}/{a.repo}", a.issue))
                 else:
+                    lock = take_item_lock(a.repo, a.issue)  # held until this process ends
+                    if lock is None:
+                        print("busy")
+                        return
                     repo = f"{g.user}/{a.repo}"
                     title = g.get(f"/repos/{repo}/issues/{a.issue}")["title"]
                     if a.go:  # started by the owner's /go: only while it is still the open request (no double start)

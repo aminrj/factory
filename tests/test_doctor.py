@@ -83,6 +83,41 @@ class KitCopiesTests(unittest.TestCase):
         self.assertEqual(doctor.results[0][0], "ok")
 
 
+class TemplateDriftTests(unittest.TestCase):
+    def tree(self, base: Path) -> tuple[Path, Path]:
+        template, app = base / "factory-template", base / "brevkoll"
+        for root in (template, app):
+            (root / ".claude" / "commands").mkdir(parents=True)
+            (root / ".factory" / "templates").mkdir(parents=True)
+        return template, app
+
+    def test_an_older_or_missing_copy_is_named_and_an_app_own_threat_model_is_not(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            template, app = self.tree(Path(d))
+            (template / ".claude/commands/validate.md").write_text("new: write acceptance.md")
+            (app / ".claude/commands/validate.md").write_text("old")
+            (template / ".claude/commands/plan.md").write_text("same")
+            (app / ".claude/commands/plan.md").write_text("same")
+            (template / ".factory/templates/acceptance.md").write_text("x")
+            (template / ".factory/templates/threat-model.md").write_text("a")
+            (app / ".factory/templates/threat-model.md").write_text("b")
+            self.assertEqual(doctor.template_drift(template, app),
+                             [".claude/commands/validate.md", ".factory/templates/acceptance.md (missing)"])
+
+    def test_the_check_warns_for_an_app_that_is_behind_and_is_ok_when_it_follows(self) -> None:
+        doctor.results.clear()
+        with tempfile.TemporaryDirectory() as d:
+            template, app = self.tree(Path(d))
+            (template / ".claude/commands/validate.md").write_text("new")
+            (app / ".claude/commands/validate.md").write_text("old")
+            with mock.patch.object(stage, "WORK", Path(d)), mock.patch("builtins.print"):
+                doctor.check_apps_follow_template()
+                (app / ".claude/commands/validate.md").write_text("new")
+                doctor.check_apps_follow_template()
+        self.assertEqual([lvl for lvl, *_ in doctor.results], ["WARN", "ok"])
+        self.assertIn("brevkoll differs", doctor.results[0][1])
+
+
 class UnitSourceTests(unittest.TestCase):
     def test_linked_from_the_factory_repo_is_fine_and_from_elsewhere_is_not(self) -> None:
         with tempfile.TemporaryDirectory() as d:

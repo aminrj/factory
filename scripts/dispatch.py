@@ -293,10 +293,37 @@ def spec_prompt(n: int, repo: str, branch: str) -> str:
         "one test per acceptance criterion, named after it, that fails on the current code and passes once the change "
         f"is built, using only the Contract. Run `uv run ruff format thoughts/{n}` and `uv run pytest "
         f"thoughts/{n}/test_issue_{n}.py` (they should fail for the right reason: the change is missing, not a mistake "
-        "in the test). Do not change src/ or any other test. Do not run git push. "
+        "in the test). Put a comment `# AC<n>` on the line above each of those tests, with the number of the criterion it "
+        "checks: a mention in the docstring does not count, and a test that carries no such comment is matched by name to "
+        "an older issue's test. "
+        "Read docs/intent.md and docs/architecture.md if they exist. In the spec's Intent section write `Serves:` (the "
+        "goal G<n> this change moves, or `none`), `Touches:` (the N<n> and I<n> it comes near, or `none`) and "
+        "`Decision needed from the owner before any code: yes` ONLY when the issue itself says a choice is still open "
+        "(then list the options under Problem and write the smallest test that does not depend on the choice). "
+        "Do not change src/ or any other test. Do not run git push. "
         "Commit with git add and git commit. Finish with a short review guide: the assumptions you made and what the "
         "owner should check first."
     )
+
+
+def write_drift(wt: Path, n: int, branch: str) -> str | None:
+    """After validate: the deterministic drift report (scripts/drift.py in the app, if it has one) is committed as
+    thoughts/N/drift.md. A model wrote the validation report; this one is made by code from the spec, the plan and the
+    diff, and the checkpoint quotes it. Best effort: a failure here never blocks the run. Returns a one-line note."""
+    script = wt / "scripts" / "drift.py"
+    if not script.exists():
+        return None
+    run("git", "fetch", "-q", "origin", "main", cwd=wt, check=False)
+    res = subprocess.run([sys.executable, "-I", str(script), str(n), "--write", "--base", "origin/main"], cwd=wt,
+                         capture_output=True, text=True, timeout=120, check=False, env=check_env())
+    out = wt / "thoughts" / str(n) / "drift.md"
+    if res.returncode != 0 or not out.exists():
+        return f"drift report failed: {(res.stderr or res.stdout).strip()[-200:]}"
+    run("git", "add", str(out.relative_to(wt)), cwd=wt, env=agent_env())
+    if run("git", "status", "--porcelain", "--", str(out.relative_to(wt)), cwd=wt):
+        run("git", "commit", "-q", "-m", f"#{n} drift: report from the spec, the plan and the diff", cwd=wt,
+            env=agent_env())
+    return None
 
 
 def place_holdout_tests(wt: Path, n: int, head_before: str) -> list[str]:
@@ -1077,6 +1104,9 @@ def main() -> None:
     if run("git", "rev-parse", "HEAD", cwd=wt) == head_before:
         declined(step, str(result.get("result") or ""))
 
+    if step == "validate":
+        if note := write_drift(wt, n, branch):
+            print(note, file=sys.stderr)
     if step == "spec":
         add_draft_status(wt / "thoughts" / str(n) / "spec.md")
         place_holdout_tests(wt, n, head_before)
