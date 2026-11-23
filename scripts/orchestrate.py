@@ -40,6 +40,7 @@ import signals  # noqa: E402
 import lanes  # noqa: E402
 import lease  # noqa: E402
 import night  # noqa: E402
+import tiers  # noqa: E402
 from gitea import Gitea, Unreachable, by_owner, is_owner_email, label_added_by_owner, ours  # noqa: E402
 
 WORK = Path(os.environ.get("WORK", Path.home() / "git" / "software-factory"))
@@ -593,10 +594,24 @@ def hop(ctx: Ctx, handler: str, done: str) -> None:
     run_handler(ctx.g, ctx.repo, ctx.n, ctx, ctx.marker, handler)
 
 
-def set_autopilot(ctx: Ctx, stop: str | None) -> None:
+def set_autopilot(ctx: Ctx, stop: str | None, tier: str | None = None) -> None:
     st = ctx.state()
-    st["autopilot"], st["stop_at"] = True, stop or ""
+    st["autopilot"], st["stop_at"], st["tier_forced"] = True, stop or "", tier or ""
     ctx.save(st)
+
+
+def issue_kind_of(ctx: Ctx) -> str:
+    """`bug`, `decision` or `feature` (scripts/tiers.py), remembered so the later hops do not ask Gitea again."""
+    st = ctx.state()
+    if st.get("kind"):
+        return str(st["kind"])
+    issue = ctx.g.get(f"/repos/{ctx.repo}/issues/{ctx.n}")
+    labels = {x["name"] for x in issue.get("labels", [])} if isinstance(issue, dict) else set()
+    kind = tiers.issue_kind(str(issue.get("title", "")), str(issue.get("body", "")), labels) if isinstance(issue, dict) \
+        else "feature"
+    st["kind"] = kind
+    ctx.save(st)
+    return kind
 
 
 DECISION_NEEDED = re.compile(r"Decision needed[^:\n]*:\s*`?yes\b", re.IGNORECASE)
@@ -644,12 +659,18 @@ def through_to_plan(ctx: Ctx) -> None:
                   + "\n".join(f"- {q}" for q in qs[:8]) + "\n\n")
     dispatch(ctx, "plan")
     if autopilot_on(ctx) and ctx.state().get("stop_at") != "plan":
-        risky = risky_plan(ctx.branch_file("plan.md"))
-        if not risky:
+        plan = ctx.branch_file("plan.md")
+        verdict = tiers.after_plan(issue_kind_of(ctx), ctx.branch_file("spec.md"), plan, risky_plan(plan),
+                                   str(ctx.state().get("tier_forced") or ""))
+        st = ctx.state()
+        st["tier"], st["tier_reasons"] = verdict.tier, verdict.reasons
+        ctx.save(st)
+        if verdict.tier == "auto":
             note_for_review(ctx, extra)
             return hop(ctx, "after_gate3", "the plan is written; building it")
-        extra += ("**The autopilot stopped here** because the plan touches risky files (" + ", ".join(
-            f"`{r}`" for r in risky) + "). Read it; `/go` builds it.\n\n")
+        extra += ("**The autopilot stopped here** (a labelled bug fix with a small plan runs on; this one does not):\n"
+                  + "\n".join(f"- {r}" for r in verdict.reasons) + "\n\nRead the plan; `/go` builds it, `/rework <note>` "
+                  "sends it back, `/go tier=auto` builds it without this stop.\n\n")
     plan_checkpoint(ctx, extra)
 
 
@@ -912,11 +933,22 @@ def drift_summary(report: str, link: str) -> str:
     return "\n\n".join(out)
 
 
+def review_depth(ctx: Ctx, report: str) -> str:
+    """How closely to read this build: the tier the plan got, and what the diff then did (scripts/tiers.py)."""
+    st = ctx.state()
+    head = re.search(r"(?m)^Drift:\s*(.+)$", report)
+    verdict = tiers.Verdict(str(st.get("tier") or "plan"), list(st.get("tier_reasons") or []))
+    if not st.get("tier"):
+        verdict.reasons = verdict.reasons or ["this item did not go through the risk check (started before it existed, or by hand)"]
+    return tiers.review_line(verdict, head.group(1).strip() if head else "no report") + "\n\n"
+
+
 def drift_block(ctx: Ctx) -> str:
     try:
-        return drift_summary(ctx.branch_file("drift.md"), ctx.file_link("drift.md")) + "\n\n"
+        report = ctx.branch_file("drift.md")
+        return review_depth(ctx, report) + drift_summary(report, ctx.file_link("drift.md")) + "\n\n"
     except StepFailed:
-        return ("### What was asked, what was built\n\nNo drift report: this app has no `scripts/drift.py`, so nothing "
+        return (review_depth(ctx, "") + "### What was asked, what was built\n\nNo drift report: this app has no `scripts/drift.py`, so nothing "
                 "compared the diff with the spec and the plan except the model's own validation report.\n\n")
 
 
@@ -1401,7 +1433,7 @@ def process_inline(g: Gitea, repo: str, n: int) -> str:
         return "refused"
     ctx.model = "local" if auto else (opts.model or commands.DEFAULT_MODEL)  # the night shift never spends credit
     if not auto and kind == "go":
-        set_autopilot(ctx, opts.stop)  # from here the item runs on to Checkpoint 4 (or where `stop=` says)
+        set_autopilot(ctx, opts.stop, opts.tier)  # from here the item runs on to Checkpoint 4 (or where `stop=` says)
     if kind == "stop":
         stop_item(ctx, marker, cmd["id"], also=covered(cmd))
         return "stopped"
@@ -1927,7 +1959,7 @@ def adopt(g: Gitea, repo: str, n: int, title: str, go: dict | None = None) -> No
         model = opts.model or commands.DEFAULT_MODEL
         ctx = Ctx(g, repo, n, None, go["id"], {}, model=model)
         ctx.auto = False
-        set_autopilot(ctx, opts.stop)
+        set_autopilot(ctx, opts.stop, opts.tier)
         until = {"spec": "the spec and its acceptance tests (Checkpoint 1)",
                  "plan": "the plan (Checkpoint 3)"}.get(opts.stop or "", "a staged build you can try (Checkpoint 4)")
         earlier = "".join(f" (comment {c['id']})" for c in g.paged(f"/repos/{repo}/issues/{n}/comments")
@@ -1966,10 +1998,13 @@ def pick_up(ctx: Ctx) -> None:
     dispatch(ctx, "spec")
     if ctx.auto:
         night.record(STATE, datetime.now(UTC), f"{ctx.app}#{ctx.n}", "spec", "drafted")
-    if autopilot_on(ctx) and ctx.state().get("stop_at") != "spec":
+    hold = tiers.after_spec(issue_kind_of(ctx), str(ctx.state().get("tier_forced") or "")) if autopilot_on(ctx) else None
+    if autopilot_on(ctx) and ctx.state().get("stop_at") != "spec" and not (hold and hold.tier == "spec"):
         return hop(ctx, "after_gate1", f"the [spec]({ctx.file_link('spec.md')}) and its acceptance tests are drafted")
+    why = ("**The autopilot stopped here:** " + "; ".join(hold.reasons) + ". Say what you want in `/go <your choice>`.\n\n"
+           if hold and hold.reasons else "")
     checkpoint(ctx, "1", "the spec and its acceptance tests",
-               f"An agent drafted the spec and the acceptance tests for \"{title}\" on `{ctx.branch}`:\n\n"
+               f"{why}An agent drafted the spec and the acceptance tests for \"{title}\" on `{ctx.branch}`:\n\n"
                f"- [spec.md]({ctx.file_link('spec.md')})\n- [tests/holdout/]({ctx.url(f'/src/branch/{ctx.branch}/tests/holdout')})"
                "\n\nIs this the change you want? Reply `/go` to approve it (I record your approval), edit the files "
                "first if something is wrong, or `/stop`.", "after_gate1")

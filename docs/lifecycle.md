@@ -47,6 +47,26 @@ before anything else. The validation report is still written by a model and is o
 
 `doctor.py` warns when an app's agent commands or document templates are behind `factory-template`'s.
 
+## How far the autopilot goes (risk tiers)
+
+A `/go` no longer means the same thing for every issue. The foreman decides in code (`scripts/tiers.py`), from the issue's
+labels, the spec and the plan:
+
+| Issue | The foreman | Why |
+|---|---|---|
+| labelled `bug`, plan of at most two phases, spec touches no `N<n>`/`I<n>`, no new dependency, no ADR, no risky file | runs to Checkpoint 4 | a failing test reproduces the bug; the invariant tests guard the promises |
+| anything else that builds (including an unlabelled issue) | stops at the plan (CP3) and lists why | the plan is the cheapest thing that can still redirect the work |
+| labelled `decision`/`question`, or the issue says it needs a decision | stops at the spec (CP1) | the choice is yours |
+
+`/go tier=auto` runs to the staged build whatever the risk check says (the reasons are still printed at CP4);
+`/go stop=plan|spec` stops earlier. Checkpoint 4 opens with **Quick review** (a clean bug fix) or **Read closely** (and
+why), from the tier and the drift report.
+
+What a prompt only asks, code makes sure of: after the spec step the foreman writes the `# AC<n>` markers itself and
+refuses a spec whose criteria have none; after validate it writes `acceptance.md` from the spec if the model did not;
+and a run that adds a test file pytest would never collect (a name that does not start with `test_`, or a folder outside
+the app's `testpaths`) is refused.
+
 ## Two environments, one image
 
 - **Staging is a container on the devbox.** At CP4 it runs the pull request's code; at CP5 it runs the release

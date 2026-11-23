@@ -306,6 +306,103 @@ def spec_prompt(n: int, repo: str, branch: str) -> str:
     )
 
 
+# ---- what a prompt asks and code makes sure of (2026-11-23, brevkoll#6): the local model skipped `# AC<n>` comments,
+# acceptance.md and the test-file naming, and nothing noticed until the owner was at Checkpoint 4. A prompt can be
+# ignored; these run after every agent step and either repair the output by code or refuse it.
+AC_ITEM = re.compile(r"^\s*[-*]\s*(?:\[[ xX]\]\s*)?\**(AC\d+)\b\**:?\s*(.*)$", re.MULTILINE)
+
+
+def spec_acs(wt: Path, n: int) -> list[tuple[str, str]]:
+    spec = wt / "thoughts" / str(n) / "spec.md"
+    return [(m.group(1), m.group(2).strip(" *")) for m in AC_ITEM.finditer(spec.read_text())] if spec.exists() else []
+
+
+def tag_ac_markers(wt: Path, n: int) -> list[str]:
+    """A holdout test named for a criterion (`test_ac2_...`) gets the `# AC2` comment scripts/trace.py counts, written by
+    code. Without it the criterion was matched, by name, to a test of an older issue (brevkoll#6: AC1..AC3 'covered' by
+    the tests of issue 1). Returns the markers added."""
+    import ast
+
+    path = wt / "tests" / "holdout" / f"test_issue_{n}.py"
+    if not path.exists():
+        return []
+    src = path.read_text()
+    lines = src.split("\n")
+    at: list[tuple[int, str]] = []
+    for node in ast.parse(src).body:
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        m = re.match(r"test_ac(\d+)(?!\d)", node.name, re.IGNORECASE)
+        if not m:
+            continue
+        top = min([node.lineno, *[d.lineno for d in node.decorator_list]])
+        if not re.search(rf"#\s*AC{m.group(1)}\b", "\n".join(lines[max(0, top - 4):node.end_lineno or top])):
+            at.append((top, f"AC{m.group(1)}"))
+    for top, ac in sorted(at, reverse=True):
+        lines.insert(top - 1, f"# {ac}")
+    if at:
+        path.write_text("\n".join(lines))
+        run("git", "add", str(path.relative_to(wt)), cwd=wt, env=agent_env())
+    return [ac for _, ac in sorted(at)]
+
+
+def ac_marker_problem(wt: Path, n: int) -> str | None:
+    """Every acceptance criterion of the spec has a `# AC<n>` comment in this issue's holdout tests."""
+    path = wt / "tests" / "holdout" / f"test_issue_{n}.py"
+    acs = [ac for ac, _ in spec_acs(wt, n)]
+    if not acs or not path.exists():
+        return None
+    text = path.read_text()
+    missing = [ac for ac in acs if not re.search(rf"#\s*{ac}\b", text)]
+    if missing:
+        return (f"the acceptance tests carry no `# {missing[0]}` comment for: {', '.join(missing)}. Name each test after its "
+                "criterion (`test_ac1_...`) or put the comment above it; without it the criterion is matched, by name, "
+                "to an older issue's test.")
+    return None
+
+
+def uncollected_tests(wt: Path, base: str) -> list[str]:
+    """Test files this run added or changed that pytest would never run: a name that does not match its pattern, or a
+    folder outside the app's testpaths (tests/holdout/ is run by CI, explicitly)."""
+    import tomllib
+
+    try:
+        conf = tomllib.loads((wt / "pyproject.toml").read_text()).get("tool", {}).get("pytest", {}).get("ini_options", {})
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
+    roots = [*conf.get("testpaths", ["tests"]), "tests/holdout"]
+    bad = []
+    for f in run("git", "diff", "--name-only", f"{base}..HEAD", cwd=wt).splitlines():
+        name = f.rsplit("/", 1)[-1]
+        if not (f.startswith("tests/") and f.endswith(".py")) or name in ("conftest.py", "__init__.py", "helpers.py"):
+            continue
+        if not (wt / f).exists() or not re.search(r"(?m)^\s*(?:async\s+)?def test_", (wt / f).read_text(errors="ignore")):
+            continue
+        named = name.startswith("test_") or name.endswith("_test.py")
+        placed = any(f.startswith(r.rstrip("/") + "/") for r in roots)
+        if not (named and placed):
+            bad.append(f)
+    return bad
+
+
+def ensure_acceptance(wt: Path, n: int) -> bool:
+    """The phone checklist exists. If the validate step did not write one (brevkoll's command never asked for it, and a
+    local model skips what is not checked), the foreman writes it from the spec's criteria and says so in the file."""
+    out = wt / "thoughts" / str(n) / "acceptance.md"
+    if out.exists() and "<what a person does" not in out.read_text() and out.read_text().strip():
+        return False
+    acs = spec_acs(wt, n)
+    if not acs:
+        return False
+    items = "\n".join(f"- [ ] {ac}: {text}" for ac, text in acs[:8])
+    out.write_text("# Acceptance checklist: #" + str(n) + "\n\n<!-- Written by the foreman from the spec's acceptance "
+                   "criteria: the validate step wrote none. -->\n" + items + "\n- [ ] Anything surprising or awkward? "
+                   "Say it in `/rework`.\n")
+    run("git", "add", str(out.relative_to(wt)), cwd=wt, env=agent_env())
+    run("git", "commit", "-q", "-m", f"#{n} acceptance: checklist generated from the spec", cwd=wt, env=agent_env())
+    return True
+
+
 def write_drift(wt: Path, n: int, branch: str) -> str | None:
     """After validate: the deterministic drift report (scripts/drift.py in the app, if it has one) is committed as
     thoughts/N/drift.md. A model wrote the validation report; this one is made by code from the spec, the plan and the
@@ -1105,14 +1202,18 @@ def main() -> None:
         declined(step, str(result.get("result") or ""))
 
     if step == "validate":
+        if ensure_acceptance(wt, n):
+            print("validate wrote no acceptance.md: generated one from the spec's acceptance criteria.")
         if note := write_drift(wt, n, branch):
             print(note, file=sys.stderr)
     if step == "spec":
         add_draft_status(wt / "thoughts" / str(n) / "spec.md")
         place_holdout_tests(wt, n, head_before)
+        if tagged := tag_ac_markers(wt, n):
+            print("marked the acceptance tests " + ", ".join(f"`# {x}`" for x in tagged) + " (the agent did not)")
         for note in tidy_spec_draft(wt, n, head_before):
             print(note)
-        problem = (spec_draft_problem(wt, n, head_before) or holdout_collect_problem(wt, n)
+        problem = (spec_draft_problem(wt, n, head_before) or holdout_collect_problem(wt, n) or ac_marker_problem(wt, n)
                    or broken_test_problem(wt, n, require_failing=True))
         if problem:
             die(problem)
@@ -1141,6 +1242,9 @@ def main() -> None:
             if not tm.exists() or not re.search(r"\bPROPOSED\b", tm.read_text()):
                 die("threat-model.md is missing or has no PROPOSED decisions.")
         if step in ("implement", "validate"):
+            if stray := uncollected_tests(wt, head_before):
+                die("pytest would never run these test files (the name must start with `test_` and the folder must be one "
+                    "of the app's testpaths): " + ", ".join(f"`{f}`" for f in stray) + ". Move or rename them.")
             found = gate_evasion(wt, head_before, str(result.get("result") or ""))
             if found:
                 refuse_evasion(wt, branch, head_before, found)

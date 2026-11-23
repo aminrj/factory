@@ -28,6 +28,8 @@ APP_LABELS = [
     ("agent:plan", "1D76DB", "Dispatch: write thoughts/<n>/plan.md"),
     ("agent:implement", "0052CC", "Dispatch: implement the next phase of an approved plan"),
     ("agent:validate", "1D76DB", "Dispatch: write thoughts/<n>/validation.md"),
+    ("bug", "EE0701", "A bug fix: the autopilot may run it to the staged build if the plan is small and touches no invariant"),
+    ("decision", "FBCA04", "The issue asks for a choice: the foreman stops at the spec"),
     ("rework", "D93F0B", "PR sent back to the agent after review"),
     ("escaped-bug", "B60205", "Bug found after merge"),
     ("human-approved", "5319E7", "Human-authored change to guarded paths"),

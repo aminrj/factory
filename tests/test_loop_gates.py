@@ -171,7 +171,7 @@ class GateTests(unittest.TestCase):
         self.checkpoint("after_gate1", "1")
         self.agent_files.update({"threat-model": "| R1 | PROPOSED |\n",
                                  "research": "# R\n\n## Open questions for the human\n\n- Is X in scope?\n", "plan": PLAN})
-        self.assertEqual(self.go("/go"), "ran after_gate1")
+        self.assertEqual(self.go("/go tier=auto"), "ran after_gate1")
         self.assertEqual(self.steps(), ["threat-model", "research", "plan", "implement", "implement", "validate"])
         cps = [c["body"] for c in self.g.comments if c["body"].startswith("🛑")]
         self.assertEqual(len(cps), 2)  # CP1 (fixture) and CP4: nothing in between waited for the owner
@@ -202,7 +202,7 @@ class GateTests(unittest.TestCase):
                     raise orchestrate.AgentDeclined("implement", "Phase 1 already covers everything.")
             return real(ctx, step, note, note_kind)
         with mock.patch.object(orchestrate, "dispatch", side_effect=dispatch):
-            self.assertEqual(self.go("/go"), "ran after_gate1")
+            self.assertEqual(self.go("/go tier=auto"), "ran after_gate1")
         self.assertEqual(self.steps()[-1], "validate")
         cp = [c["body"] for c in self.g.comments if c["body"].startswith("🛑")][-1]
         self.assertIn("CHECKPOINT 4", cp)
