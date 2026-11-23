@@ -49,3 +49,4 @@
 {"ts": "2026-11-22T21:51:03+00:00", "repo": "brevkoll", "issue": 6, "gate": "spec", "minutes": 0, "source": "auto", "comment_id": 1351}
 {"ts": "2026-11-22T21:55:14+00:00", "repo": "brevkoll", "issue": 6, "gate": "plan_review", "minutes": 0, "source": "auto", "comment_id": 1351}
 {"ts": "2026-11-23T19:09:22+00:00", "repo": "brevkoll", "issue": 36, "gate": "spec", "minutes": 0, "source": "auto", "comment_id": 1406}
+{"ts": "2026-11-23T19:13:59+00:00", "repo": "brevkoll", "issue": 36, "gate": "plan_review", "minutes": 0, "source": "auto", "comment_id": 1406}

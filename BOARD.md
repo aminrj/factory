@@ -1,19 +1,18 @@
 # Board
 
-_Generated 2026-11-23 19:10 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-23 19:14 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 24.0 |
-| brevkoll#6 | 4: try it, review and merge | 2026-11-22T22:01+00:00 | 21.1 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 24.1 |
+| brevkoll#6 | 4: try it, review and merge | 2026-11-22T22:01+00:00 | 21.2 |
 
 ## idea
 
 | Item | Issue |
 |---|---|
-| The application returns "The model returned an unusable answer." even after sending a correct pdf file with a Swedish letter in it | brevkoll#36 |
 | Support a model endpoint that needs a client certificate (mutual TLS) | brevkoll#14 |
 
 ## spec-ready
@@ -26,6 +25,7 @@ _Generated 2026-11-23 19:10 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
+| The application returns "The model returned an unusable answer." even after sending a correct pdf file with a Swedish letter in it | brevkoll#36 |
 | Show the app version on /healthz and in the page footer | brevkoll#32 |
 | Uploaded a 256ko pdf file to the app and got an error File too large. | brevkoll#29 |
 | Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
