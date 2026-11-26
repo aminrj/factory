@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-26 16:05 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-26 18:10 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 92.9 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 95.0 |
 
 ## idea
 
@@ -24,6 +24,7 @@ _Generated 2026-11-26 16:05 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
+| I am still getting file too large when uploading a small PDF file. Here is the pdf I am using and the error is "file too large"? | brevkoll#43 |
 | The application returns "The model returned an unusable answer." even after sending a correct pdf file with a Swedish letter in it | brevkoll#36 |
 | Show the app version on /healthz and in the page footer | brevkoll#32 |
 | Uploaded a 256ko pdf file to the app and got an error File too large. | brevkoll#29 |
