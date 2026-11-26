@@ -103,3 +103,5 @@
 {"ts": "2026-11-26T15:52:45Z", "repo": "brevkoll", "issue": 8, "step": "threat-model", "duration_s": 111.2, "cost_usd": 0.041186376, "turns": 13, "is_error": false, "fallback": false, "model": "grok", "retros": 2}
 {"ts": "2026-11-26T15:54:08Z", "repo": "brevkoll", "issue": 8, "step": "research", "duration_s": 80.7, "cost_usd": 0.040253416, "turns": 11, "is_error": false, "fallback": false, "model": "grok", "retros": 2}
 {"ts": "2026-11-26T15:55:43Z", "repo": "brevkoll", "issue": 8, "step": "plan", "duration_s": 93.9, "cost_usd": 0.055820791999999994, "turns": 12, "is_error": false, "fallback": false, "model": "grok", "retros": 2}
+{"ts": "2026-11-26T16:00:52Z", "repo": "brevkoll", "issue": 8, "step": "implement", "duration_s": 109.8, "cost_usd": 0.064481816, "turns": 15, "is_error": false, "fallback": false, "model": "grok", "retros": 1}
+{"ts": "2026-11-26T16:04:10Z", "repo": "brevkoll", "issue": 8, "step": "validate", "duration_s": 135.4, "cost_usd": 0.031979584, "turns": 12, "is_error": false, "fallback": false, "model": "grok", "retros": 2}

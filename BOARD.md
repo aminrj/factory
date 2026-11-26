@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-26 15:55 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-26 16:05 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 92.8 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 92.9 |
 
 ## idea
 
@@ -18,7 +18,7 @@ _Generated 2026-11-26 15:55 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| Small gaps from the v1 validation report | brevkoll#8 |
+| (none) | |
 
 ## building
 
@@ -30,6 +30,7 @@ _Generated 2026-11-26 15:55 UTC by `scripts/collect_metrics.py`._
 | Quality guard green again: split create_app, trace T6 and T15 | brevkoll#26 |
 | Ready for the cluster: the model over mutual TLS, and a hardened deploy/ base | brevkoll#19 |
 | UI refresh: a professional, fast interface for reading a letter on a phone | brevkoll#15 |
+| Small gaps from the v1 validation report | brevkoll#8 |
 | Chunked uploads without Content-Length are only rejected after parsing | brevkoll#7 |
 | OCR misreads characters in the letter, for example the @ in an email address | brevkoll#6 |
 
