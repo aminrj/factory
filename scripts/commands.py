@@ -18,8 +18,9 @@ MODELS: dict[str, str] = {
     "smart": "Claude Opus (best results, highest cost)",
     "fast": "Claude Sonnet (good and quicker)",
     "cheap": "Claude Haiku (lowest cost)",
+    "grok": "Grok, as logged in on the foreman host (your skills and prompts)",
 }
-# `/go` alone runs on the local model: the cloud is used only when the owner types `model=smart|fast|cheap`.
+# `/go` alone runs on the local model. The cloud is used only when the owner types `model=smart|fast|cheap|grok`.
 DEFAULT_MODEL = os.environ.get("FACTORY_DEFAULT_MODEL", "local")
 # The owner's own time on a gate (reading, trying, deciding), in minutes. Typing `minutes=N` records N; without it the
 # gate's typical time below is recorded and marked `default`, so the metrics can tell measured time from a guess.
@@ -33,7 +34,9 @@ OPTIONS: dict[str, str] = {"minutes": "N (your own time on this gate, optional)"
                            "stop": "|".join(STOPS) + " (pause there for your review instead of running to the staged build)"}
 OPTION = re.compile(r"^([A-Za-z_][\w-]*)=(\S*)$")
 USAGE = ("`/go [model=" + "|".join(MODELS) + "] [stop=" + "|".join(STOPS) + "] [tier=auto] [minutes=N]` (default: local model; a labelled bug "
-         "fix runs to the staged build, anything else stops at the plan), `/stop`, `/rework [model=...] <what is wrong>`")
+         "fix runs to the staged build, anything else stops at the plan), "
+         "`/auto [model=...]` (the same, and it runs to the staged build without stopping at the plan), "
+         "`/stop`, `/rework [model=...] <what is wrong>`")
 
 
 @dataclass

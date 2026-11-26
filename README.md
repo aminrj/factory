@@ -22,7 +22,7 @@ Agents write the code. I own the decisions, at the points where they are still c
 | 6. Promote | Merge the GitOps PR | homelab |
 | 7. Evaluate | Keep, iterate or kill after 14 days | board |
 
-I answer each gate with a comment on the Gitea work issue (`/go`, `/rework <note>`, `/stop`), and a small process, the foreman, runs the next agent step, on the local model unless I ask for Claude (`/go model=smart`). Every gate records my minutes, typed (`minutes=N`) or the gate's default, marked as such. That is the data this project exists to collect.
+I answer each gate with a comment on the Gitea work issue (`/go`, `/rework <note>`, `/stop`), and a small process, the foreman, runs the next agent step, on the local model unless I ask for Claude (`/go model=smart`) or Grok (`/go model=grok`, or `/auto model=grok` for the whole autopilot). Every gate records my minutes, typed (`minutes=N`) or the gate's default, marked as such. That is the data this project exists to collect.
 
 At night, issues I label `night/ok` move through gates 1 to 3 on their own, on the local model, and stop at the review for me: [docs/night-shift.md](docs/night-shift.md) (also: what each checkpoint is).
 

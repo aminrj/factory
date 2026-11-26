@@ -421,3 +421,22 @@ class RunAgentInterruptTests(unittest.TestCase):
             )
         self.assertLess(time.time() - t0, 15)
         self.assertEqual((res["interrupted"], res["session_id"]), ("stop", "abc"))
+
+    def test_a_cancelled_result_is_still_an_interrupt(self) -> None:
+        # grok prints a result with stop_reason cancelled when the process is killed; /steer must still resume
+        script = (
+            "import json,sys,time; sys.stdin.read(); "
+            "print(json.dumps({'type':'result','subtype':'error_during_execution','stop_reason':'cancelled',"
+            "'is_error':True,'session_id':'abc','result':'cancelled'}), flush=True); time.sleep(60)"
+        )
+        live = mock.Mock()
+        asks = iter([None, "stop"])
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(dispatch, "WATCH_EVERY_S", 0.2),
+        ):
+            res = dispatch.run_agent(
+                [sys.executable, "-c", script], "prompt", Path(tmp), dict(os.environ), live,
+                time.time() + 120, interrupt=lambda: next(asks, "stop"),
+            )
+        self.assertEqual((res["interrupted"], res["session_id"]), ("stop", "abc"))

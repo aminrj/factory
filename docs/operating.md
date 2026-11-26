@@ -28,7 +28,8 @@ nothing can happen, the factory says why.
 | `/go stop=spec\|plan` | an issue not started yet, or any checkpoint | the same, but pause at the spec (CP1) or at the plan (CP3) |
 | `/go` | CP1, CP3 (and CP2, 2b on items that were already waiting there) | **approve** what is shown and continue. The factory records your approval in the file (`Status: approved`, or the remaining `PROPOSED` rows become `ACCEPTED`) in a commit that names your comment. To change something first, edit the file, then `/go` |
 | `/go` | any other checkpoint | continue (on the autopilot, up to Checkpoint 4); runs on the **local model**, records the gate's typical minutes |
-| `/go model=smart\|fast\|cheap` | any checkpoint | the same step on Claude (Opus, Sonnet, Haiku): spends cloud tokens |
+| `/go model=smart\|fast\|cheap\|grok` | any checkpoint | this run on Claude (Opus, Sonnet, Haiku) or on Grok. `model=grok` is the `grok` you logged in on the foreman host, with your skills and prompts |
+| `/auto [model=...]` | an issue, or any checkpoint | the same as `/go tier=auto`: the autopilot runs to the staged build and does not stop at the plan. `model=` is the model for every step of that run |
 | `/go minutes=N` | any checkpoint | record your real time on the gate instead of the default |
 | `/rework <what is wrong>` | CP3 plan, CP4 review, CP5 release | send it back with a note |
 | `/stop` | while a step runs | **ends the step within seconds** (its unfinished work kept on a local `refused/` branch, nothing pushed); the item waits at a `-stopped` checkpoint (`/go` again, `/go model=fast`, or `/stop`), and the lane is free for the next item |
@@ -54,7 +55,7 @@ The foreman never runs a step itself. Each step runs in its own process, in a la
 | Lane | Capacity | What goes there |
 |---|---|---|
 | local | 1 (one GPU) | every `/go` without `model=`, the night shift, the spec drafts of picked-up issues |
-| cloud | 3 | `model=smart|fast|cheap` only |
+| cloud | 3 | `model=smart|fast|cheap|grok` |
 
 A command whose lane is full waits, and the status job tells you at once which item holds the lane. `/go model=fast`
 on another item runs in parallel with a local step.

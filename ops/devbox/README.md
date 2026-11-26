@@ -50,7 +50,7 @@ minutes for a tick to finish there. If none does, it rolls back by itself. Rollb
 
 ## The local model: which one, and waking its host
 
-`/go` runs on the local model unless you type `model=smart|fast|cheap`. "Local" is whichever model already serves; the
+`/go` runs on the local model unless you type `model=smart|fast|cheap|grok`. "Local" is whichever model already serves; the
 factory never loads or switches one. In `~/.config/factory/local-model.env` on the devbox:
 
 ```
@@ -106,7 +106,7 @@ The tick never runs a step itself any more (`scripts/lanes.py`). When an item ha
 goes back to watching:
 
 - **local** (`FACTORY_LANE_LOCAL`, default 1): every `/go` without `model=`, every night-shift step and pick-up.
-- **cloud** (`FACTORY_LANE_CLOUD`, default 3): `model=smart|fast|cheap` only.
+- **cloud** (`FACTORY_LANE_CLOUD`, default 3): `model=smart|fast|cheap|grok`. `grok` is the `grok` binary logged in on this host.
 
 A command whose lane is full waits; the status job tells you which item holds the lane. See what runs:
 `systemctl --user list-units 'factory-*'`, the lane records in `state/lanes/`, and the board. `FACTORY_LANES=off`

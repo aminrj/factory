@@ -69,6 +69,14 @@ class LiveTests(unittest.TestCase):
             live.close()
             self.assertIn("line 19", (Path(tmp) / "state/board/live/app-1.last.log").read_text())
 
+    def test_grok_tool_names_read_as_the_same_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            live = Live(Path(tmp), "app", 1, "implement", "grok", Path("/w/app-issue-1"))
+            live.event({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "read_file", "input": {"path": "/w/app-issue-1/src/x.py"}}]}})
+            self.assertEqual(live.state["action"], "reads src/x.py")
+            live.close()
+
     def test_paths_are_shown_relative_to_the_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             live = Live(Path(tmp), "app", 1, "implement", "local", Path("/w/app-issue-1"))

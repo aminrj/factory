@@ -9,7 +9,7 @@ handler exactly as the tick used to.
 Lanes and their capacity (how many items run at once):
   local  FACTORY_LANE_LOCAL, default 1: one GPU, one model, one step at a time. Every `/go` without `model=`, every
          night-shift step and every pick-up lands here: the owner's cloud tokens are spent only when asked for.
-  cloud  FACTORY_LANE_CLOUD, default 3: `model=smart|fast|cheap`.
+  cloud  FACTORY_LANE_CLOUD, default 3: `model=smart|fast|cheap|grok`.
 A command whose lane is full waits (the status job tells the owner which item holds the lane) and starts when a slot
 frees. FACTORY_LANES=off runs every step inside the tick, as before.
 

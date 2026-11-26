@@ -166,13 +166,14 @@ The staged build is removed on merge or `/stop`. `stage.py status` lists what ru
 
 Commands are owner comments on the work issue; the registry is `scripts/commands.py`.
 
-- `/go [minutes=N] [model=local|smart|fast|cheap]`: continue at the checkpoint. Free text on the same line or below is a note.
+- `/go [minutes=N] [model=local|smart|fast|cheap|grok]`: continue at the checkpoint. Free text on the same line or below is a note. `model=grok` runs the `grok` CLI logged in on the foreman host.
+- `/auto [model=...]`: the same as `/go tier=auto`. The autopilot runs to the staged build on that model and does not stop at the plan.
 - `/rework [model=...] <what is wrong>`: at the plan and review checkpoints only.
 - `/stop`.
 
 Options are strict: an unknown option (`agent=local`) or a bad value (`model=gpt5`, `minutes=ten`) is refused by name with a comment and a push, and nothing runs. A command that arrived while another one was running gets a "not acted on" notice instead of silence.
 
-Profiles: `smart` = Claude Opus, `fast` = Claude Sonnet, `cheap` = Claude Haiku, `local` = the local model on the GPU machine through `scripts/model_shim.py` (an Anthropic-compatible pass-through started for one step; no cloud credit used). No `model=` keeps the Claude account default. The foreman never switches models on its own: when the cloud limit is hit, the step is `blocked: credit_exhausted`, no retry is counted, and the checkpoint says to reply `/go model=local`. When the local model is down (loading, GPU busy, host off) the step is `blocked: model_unavailable`. The other classes are `blocked: auth` and `blocked: rate_limit` (`FAILURE_CLASSES` in `dispatch.py`, matched on the tail of a failed run); a failure that fits none of them is an ordinary failure and uses the retry budget. The local route is configured in the untracked `~/.config/factory/local-model.env` (`LOCAL_MODEL_URL`, `LOCAL_MODEL_NAME`, `LOCAL_MODEL_KEY_FILE`, optional `LOCAL_MODEL_TLS_CERT_FILE`, `LOCAL_MODEL_TLS_KEY_FILE`, `LOCAL_MODEL_TLS_CA_FILE`).
+Profiles: `smart` = Claude Opus, `fast` = Claude Sonnet, `cheap` = Claude Haiku, `grok` = the `grok` CLI as logged in on the foreman host (your skills and prompts; no separate factory config), `local` = the local model on the GPU machine through `scripts/model_shim.py` (an Anthropic-compatible pass-through started for one step; no cloud credit used). No `model=` keeps the Claude account default. The foreman never switches models on its own: when the cloud limit is hit, the step is `blocked: credit_exhausted`, no retry is counted, and the checkpoint says to reply `/go model=local`. When the local model is down (loading, GPU busy, host off) the step is `blocked: model_unavailable`. The other classes are `blocked: auth` and `blocked: rate_limit` (`FAILURE_CLASSES` in `dispatch.py`, matched on the tail of a failed run); a failure that fits none of them is an ordinary failure and uses the retry budget. The local route is configured in the untracked `~/.config/factory/local-model.env` (`LOCAL_MODEL_URL`, `LOCAL_MODEL_NAME`, `LOCAL_MODEL_KEY_FILE`, optional `LOCAL_MODEL_TLS_CERT_FILE`, `LOCAL_MODEL_TLS_KEY_FILE`, `LOCAL_MODEL_TLS_CA_FILE`).
 
 ## 5. Phase 0: set up the factory (one evening, 2h cap)
 

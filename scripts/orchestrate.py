@@ -11,7 +11,8 @@ State lives in the issue itself, so nothing has to stay open between steps:
     `<!--factory:resume=<handler>;stop=<what>-->` that says which handler runs on /go.
   * a comment that starts with `▶` means a step was picked up (or the run stopped). Ticks ignore those.
   * only comments by the Gitea user that owns the token count, and only the exact forms
-    `/go [model=P] [minutes=N]`, `/rework <note>` and `/stop`. Everything else is data and is ignored.
+    `/go [model=P] [minutes=N]`, `/auto [model=P]` (a `/go` that runs to the staged build), `/rework <note>` and `/stop`.
+    Everything else is data and is ignored.
 Handlers call dispatch.py for every agent step, so the guards there still apply. A failed step posts a new
 checkpoint with the diagnosis (at most 2 retries per handler, then it asks for a session).
 Notifications go to a self-hosted ntfy if NTFY_URL and NTFY_TOPIC are set (env or ~/.config/factory/ntfy.env).
@@ -50,6 +51,7 @@ STATE = WORK / "state"
 # The command is the first line. Anything after it, on the same line or below (a note to me), is allowed and ignored,
 # except `minutes=N` on the first line. A command that is not understood gets a reply, never silence.
 GO = re.compile(r"^\s*/go\b([^\r\n]*)", re.IGNORECASE)
+AUTO = re.compile(r"^\s*/auto\b([^\r\n]*)", re.IGNORECASE)  # /go that forces tier=auto: the autopilot does not stop at the plan
 MINUTES = re.compile(r"\bminutes=(\d+)", re.IGNORECASE)  # `minutes=5min` is read as 5
 STOP = re.compile(r"^\s*/stop[ \t]*(?:\r?\n|$)", re.IGNORECASE)
 # At the review checkpoint only: `/rework what is wrong` (same line or the lines below) sends the note to a new implement run.
@@ -370,7 +372,8 @@ def dispatch(ctx: Ctx, step: str, note: str | None = None, note_kind: str = "ci"
         st["escalations"] = st.get("escalations", 0) + 1
         ctx.save(st)
         why = str(e).strip().splitlines()
-        reason = next((ln for ln in why if ln.startswith(("REFUSED", "stalled", "claude run failed"))), why[-1] if why else "")
+        reason = next((ln for ln in why if ln.startswith(("REFUSED", "stalled", "claude run failed", "agent run failed"))),
+                      why[-1] if why else "")
         ctx.comment(f"{NOTICE_PREFIX} `{step}` failed on the local model: {reason[:300]}\n\nI am running it again on "
                     f"`{ESCALATE_TO}` (Claude) by myself. This item has spent ${spent:.2f} of its "
                     f"${ITEM_CLOUD_BUDGET_USD:.0f} cloud budget; switch {st['escalations']} of {MAX_ESCALATIONS}. "
@@ -1208,8 +1211,11 @@ def answered_ids(mine: list[dict]) -> set[int]:
 
 
 def command_options(body: str) -> commands.Parsed:
-    if m := GO.match(body):
-        return commands.parse_go(m.group(1))
+    if m := (GO.match(body) or AUTO.match(body)):
+        parsed = commands.parse_go(m.group(1))
+        if AUTO.match(body) and not parsed.errors and not parsed.tier:
+            parsed.tier = "auto"  # `/auto` is `/go tier=auto`: do not stop at the plan
+        return parsed
     if m := REWORK.match(body):
         return commands.parse_rework(m.group(1) or "")[0]
     return commands.Parsed()
@@ -1239,7 +1245,7 @@ def decide(g: Gitea, repo: str, n: int) -> tuple[dict, dict, str, int | None] | 
         stops = [c for c in cmds if STOP.match(c["body"])]
         c = stops[-1] if stops else cmds[-1]
         c = {**c, "covers": [x["id"] for x in cmds if x["id"] != c["id"]]}
-        if m := GO.match(c["body"]):
+        if m := (GO.match(c["body"]) or AUTO.match(c["body"])):
             minutes = MINUTES.search(m.group(1))
             return pivot, c, "go", int(minutes.group(1)) if minutes else None
         return pivot, c, "stop" if STOP.match(c["body"]) else "rework", None
@@ -1326,8 +1332,8 @@ def start_request(g: Gitea, repo: str, n: int) -> dict | None:
         return None
     answered = answered_ids(mine)
     cutoff = datetime.now(UTC) - timedelta(hours=START_WINDOW_H)
-    gos = [c for c in comments if by_owner(g, c) and GO.match(c["body"]) and c["id"] not in answered
-           and parse_ts(c["created_at"]) >= cutoff]
+    gos = [c for c in comments if by_owner(g, c) and (GO.match(c["body"]) or AUTO.match(c["body"]))
+           and c["id"] not in answered and parse_ts(c["created_at"]) >= cutoff]
     return gos[-1] if gos else None
 
 
@@ -1490,7 +1496,8 @@ def process_inline(g: Gitea, repo: str, n: int) -> str:
                     f"`{night.checkpoint_label(pivot['body'])}` myself: {auto}. Running `{handler}` on model `local`. "
                     "You review everything at Checkpoint 4; remove the label or reply `/stop` to stop me.")
     else:
-        ctx.comment(f"{CLAIM_PREFIX} Picked up `/{'rework' if kind == 'rework' else 'go'}` (comment {cmd['id']}"
+        verb = "rework" if kind == "rework" else ("auto" if AUTO.match(cmd["body"]) else "go")
+        ctx.comment(f"{CLAIM_PREFIX} Picked up `/{verb}` (comment {cmd['id']}"
                     f"{f', {minutes} min' if minutes is not None else ''}){covered(cmd)}. Running `{handler}` on model "
                     f"`{ctx.model or 'default'}`.")
     log(f"{app}#{n}: /go (comment {cmd['id']}, minutes={minutes}, model={ctx.model}) -> {handler}")
@@ -1678,7 +1685,7 @@ def parse_ts(value: str) -> datetime:
 
 
 def is_command(body: str) -> bool:
-    return bool(GO.match(body) or STOP.match(body) or REWORK.match(body))
+    return bool(GO.match(body) or AUTO.match(body) or STOP.match(body) or REWORK.match(body))
 
 
 def owner_comments(g: Gitea, repo: str, n: int) -> list[dict]:
@@ -1697,13 +1704,14 @@ def answer_unknown_commands(g: Gitea, repo: str, n: int) -> None:
         cutoff = datetime.now(UTC) - timedelta(hours=START_WINDOW_H)
         for c in owner_comments(g, repo, n):
             key = f"{repo}#{c['id']}"
-            if (key in seen or not c["body"].lstrip().startswith("/") or GO.match(c["body"])
+            if (key in seen or not c["body"].lstrip().startswith("/") or GO.match(c["body"]) or AUTO.match(c["body"])
                     or parse_ts(c["created_at"]) < cutoff):
                 continue
             word = c["body"].lstrip().split()[0][:30]
             g.comment(repo, n, f"{NOTICE_PREFIX} `{word}` (comment {c['id']}) did nothing: this issue has not started "
                                "yet. Reply `/go` to start it (the autopilot runs to a staged build you can try; `/go stop=spec` pauses after the spec); "
-                               "add `model=fast` to use the cloud.")
+                               "`/auto` runs to the staged build without stopping at the plan. "
+                               "Add `model=fast` for Claude or `model=grok` for Grok.")
             seen.add(key)
         STATE.mkdir(exist_ok=True)
         REPLIED.write_text(json.dumps(sorted(seen)[-300:]))
@@ -1991,11 +1999,13 @@ def adopt(g: Gitea, repo: str, n: int, title: str, go: dict | None = None) -> No
         until = {"spec": "the spec and its acceptance tests (Checkpoint 1)",
                  "plan": "the plan (Checkpoint 3)"}.get(opts.stop or "", "a staged build you can try (Checkpoint 4)")
         earlier = "".join(f" (comment {c['id']})" for c in g.paged(f"/repos/{repo}/issues/{n}/comments")
-                          if by_owner(g, c) and GO.match(c["body"]) and c["id"] < go["id"])
+                          if by_owner(g, c) and (GO.match(c["body"]) or AUTO.match(c["body"])) and c["id"] < go["id"])
         also = f", covering the earlier{earlier}" if earlier else ""
-        ctx.comment(f"{CLAIM_PREFIX} Picked up `/go` (comment {go['id']}){also}: starting this issue. An agent reads it (and "
-                    f"your comments) and works on model `{model}` until {until}. It stops earlier only for a plan that "
-                    "touches risky files or a step that fails. `/stop` stops it.")
+        verb = "auto" if AUTO.match(go["body"]) else "go"
+        stop_note = ("It stops earlier only when a step fails." if verb == "auto" and not opts.stop
+                     else "It stops earlier only for a plan that touches risky files or a step that fails.")
+        ctx.comment(f"{CLAIM_PREFIX} Picked up `/{verb}` (comment {go['id']}){also}: starting this issue. An agent reads it (and "
+                    f"your comments) and works on model `{model}` until {until}. {stop_note} `/stop` stops it.")
     else:
         ctx = Ctx(g, repo, n, None, 0, {}, model="local")
         ctx.auto = True

@@ -1,4 +1,4 @@
-"""Model profiles (`/go model=local|smart|fast|cheap`), strict options, failure classes and the local-model shim.
+"""Model profiles (`/go model=local|smart|fast|cheap|grok`), strict options, failure classes and the local-model shim.
 
 Nothing here calls a real model: the shim is tested against a fake upstream on a loopback port.
 """
@@ -30,7 +30,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(commands.parse_go(" minutes=5min").minutes, 5)
 
     def test_each_profile_is_accepted(self) -> None:
-        for name in ("local", "smart", "fast", "cheap", "LOCAL"):
+        for name in ("local", "smart", "fast", "cheap", "grok", "LOCAL"):
             self.assertEqual(commands.parse_go(f" model={name}").model, name.lower())
 
     def test_unknown_key_and_bad_values_are_refused_by_name(self) -> None:
@@ -70,6 +70,15 @@ class ProfileTests(unittest.TestCase):
             dispatch.model_args(name, self.BASE, "http://127.0.0.1:1", "m")
         with self.assertRaises(ValueError):
             dispatch.model_args("gpt5", self.BASE)
+
+    def test_grok_is_the_logged_in_cli_with_no_factory_config(self) -> None:
+        cmd, env = dispatch.cli_for("grok", self.BASE)
+        self.assertEqual(cmd, ["grok", "-p", "--always-approve"])
+        self.assertEqual(env, self.BASE)
+        self.assertEqual(dispatch.stream_flags(cmd), ["--output-format", "streaming-messages-json"])
+        claude, _ = dispatch.cli_for("fast", self.BASE)
+        self.assertEqual(claude[0], "claude")
+        self.assertIn("--model", claude)
 
 
 class ClassifyTests(unittest.TestCase):

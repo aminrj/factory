@@ -48,6 +48,12 @@ def result_text(content: object) -> str:
     return ""
 
 
+# Grok's tool ids, shown on the board as the same actions Claude's names already mean.
+TOOL_ALIASES = {"read_file": "Read", "hashline_read": "Read", "grep": "Grep", "hashline_grep": "Grep",
+                "search_replace": "Edit", "hashline_edit": "Edit", "write": "Write",
+                "run_terminal_cmd": "Bash", "run_terminal_command": "Bash", "bash": "Bash"}
+
+
 def describe_tool(name: str, inp: dict) -> tuple[str, str | None]:
     """A readable line for a tool call, and the file it touches when it writes one."""
     path = inp.get("file_path") or inp.get("notebook_path") or inp.get("path")
@@ -112,17 +118,18 @@ class Live:
                     inp = block.get("input") or {}
                     if self.prefix:  # paths relative to the worktree read better on a phone
                         inp = {k: (v.removeprefix(self.prefix) if isinstance(v, str) else v) for k, v in inp.items()}
-                    what, path = describe_tool(block.get("name", ""), inp)
+                    name = TOOL_ALIASES.get(block.get("name", ""), block.get("name", ""))
+                    what, path = describe_tool(name, inp)
                     self.state["action"] = what
-                    self.watch_loop(block.get("name", ""), what)
-                    full = f"→ runs `{inp.get('command', '')}`" if block.get("name") == "Bash" else f"→ {what}"
+                    self.watch_loop(name, what)
+                    full = f"→ runs `{inp.get('command') or inp.get('cmd', '')}`" if name == "Bash" else f"→ {what}"
                     self.line(full, short(full, 400))
                     if path and path not in self.state["files"]:
                         self.state["files"].append(path)
-                    if block.get("name") == "TodoWrite":  # older Claude Code: the whole list each time
+                    if name == "TodoWrite":  # older Claude Code: the whole list each time
                         self.state["todos"] = [{"id": str(i), "text": short(t.get("content") or t.get("activeForm") or "", 120),
                                                 "status": t.get("status", "pending")} for i, t in enumerate(inp.get("todos") or [])]
-                    elif block.get("name") == "TaskUpdate":  # 2.1.x: one task at a time, by id
+                    elif name == "TaskUpdate":  # 2.1.x: one task at a time, by id
                         for t in self.state["todos"]:
                             if t["id"] == str(inp.get("taskId")):
                                 t["status"] = inp.get("status") or t["status"]

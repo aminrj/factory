@@ -239,7 +239,8 @@ GATES = """<table><tr><th>CP</th><th>What waits for you</th><th>What you decide<
 <tr><td>4b</td><td>merged and mirrored</td><td>/go closes the item (release is manual for now)</td><td>closed</td></tr></table>
 <p class="muted">Suffixes: <b>-retry</b> a step failed (budget 2) · <b>-blocked</b> model, credit or login (no retry spent) ·
 <b>-fix</b> something only you can fix · <b>-failed</b> retries used up · <b>-stopped</b> you ended the step. Commands:
-<code>/go</code> (local model; <code>model=smart|fast|cheap</code> for Claude; <code>stop=spec|plan</code> to pause there),
+<code>/go</code> (local model; <code>model=smart|fast|cheap</code> for Claude; <code>model=grok</code> for Grok; <code>stop=spec|plan</code> to pause there),
+<code>/auto</code> (the same, straight to the staged build; <code>/auto model=grok</code> runs that on Grok),
 <code>/rework &lt;note&gt;</code> (CP3, CP4), <code>/stop</code> (while a step runs: ends that step now), <code>/steer
 &lt;note&gt;</code> (while a step runs: the agent gets it within seconds). A failed local step is tried once on Claude by
 itself (item budget $5). Label <code>night/ok</code>: the night shift runs items on the local model and stops at CP4.</p>"""

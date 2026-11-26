@@ -146,7 +146,7 @@ def ack_text(view: dict, cmd: dict, tick_s: int | None, running: dict | None) ->
                 "running agent a direction, `/stop` ends the step.")
     if view.get("pivot") and o.parse_marker(view["pivot"]["body"]).get("resume") == "manual":
         return None  # nothing will start: the tick answers at once that a session is needed
-    if lanes.enabled() and (o.GO.match(cmd["body"]) or o.REWORK.match(cmd["body"])):
+    if lanes.enabled() and (o.GO.match(cmd["body"]) or o.AUTO.match(cmd["body"]) or o.REWORK.match(cmd["body"])):
         opts = o.command_options(cmd["body"])
         lane = lanes.lane_of(opts.model or commands.DEFAULT_MODEL)
         if not opts.errors and not lanes.has_room(o.STATE, lane):

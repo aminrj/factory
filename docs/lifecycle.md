@@ -28,7 +28,7 @@ spec pasted ─▶ spec ─▶ threat model ─▶ plan ─▶ build (phases + C
 | 9 | **CP6 live** | Argo CD syncs. The foreman watches the rollout (pods ready, no restarts for 10 minutes) and runs a smoke test against `https://<app>.<apps domain>/`. If it fails, a revert PR is ready. | nothing, or merge the revert | planned |
 | 10 | **Assess** | After 7 and 14 days a read-only review of the shipped code opens issues for what it finds (`scripts/lookback.py`); the board shows lead time from spec to production. | read the findings | review exists, timers not installed |
 
-Every stage runs on the local model unless you write `model=smart|fast|cheap`. Label an issue `night/ok` and the
+Every stage runs on the local model unless you write `model=smart|fast|cheap|grok`. `/auto model=grok` runs the autopilot to the staged build on Grok. Label an issue `night/ok` and the
 night shift does the same on the local model at night (see [night-shift.md](night-shift.md)); CP4, CP5 and the deploy are always yours.
 
 ## Intent, architecture and the drift report

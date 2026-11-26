@@ -27,7 +27,7 @@ Checkpoints whose label ends in `-retry` (a step failed, retry budget 2), `-bloc
 no retry spent), `-fix` (something only you can fix) or `-failed` (retries used up) are the same gates after a problem.
 
 Defaults: `/go` alone runs on the **local model** and records the gate's typical time (`minutes=` is optional; see
-`scripts/commands.py`). `/go model=smart|fast|cheap` uses Claude.
+`scripts/commands.py`). `/go model=smart|fast|cheap` uses Claude. `/go model=grok` and `/auto model=grok` use the Grok logged in on the foreman host. The night shift stays on the local model.
 
 ## The night shift: `night/ok`
 

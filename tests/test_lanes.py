@@ -44,8 +44,8 @@ class LaneBookTests(unittest.TestCase):
         self.assertEqual(child["GITEA_TOKEN_FILE"], "/x")
 
     def test_lanes_by_model(self) -> None:
-        self.assertEqual([lanes.lane_of(m) for m in (None, "local", "fast", "smart", "cheap")],
-                         ["local", "local", "cloud", "cloud", "cloud"])
+        self.assertEqual([lanes.lane_of(m) for m in (None, "local", "fast", "smart", "cheap", "grok")],
+                         ["local", "local", "cloud", "cloud", "cloud", "cloud"])
 
 
 class HandOffTests(unittest.TestCase):

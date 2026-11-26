@@ -86,9 +86,10 @@ SHIM = Path(__file__).resolve().parent / "model_shim.py"
 
 def model_args(profile: str | None, env: dict[str, str], shim_url: str | None = None,
                local_name: str = "") -> tuple[list[str], dict[str, str]]:
-    """Extra `claude` arguments and the environment for a profile. None keeps the account default (as before)."""
+    """Extra `claude` arguments and the environment for a profile. None keeps the account default (as before).
+    `grok` adds nothing here: it is a different CLI (see `cli_for`)."""
     env = dict(env)
-    if profile is None:
+    if profile is None or profile == "grok":
         return [], env
     if profile in CLOUD_MODELS:
         return ["--model", CLOUD_MODELS[profile]], env
@@ -100,6 +101,27 @@ def model_args(profile: str | None, env: dict[str, str], shim_url: str | None = 
                    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_TELEMETRY="1")
         return ["--model", local_name], env
     raise ValueError(f"unknown model profile {profile!r}")
+
+
+def cli_for(profile: str | None, env: dict[str, str], shim_url: str | None = None,
+            local_name: str = "") -> tuple[list[str], dict[str, str]]:
+    """The agent process for a profile. `grok` is the `grok` CLI already logged in on this host: no model id, no
+    separate config, so the owner's skills and prompts load. `--always-approve` is the one flag a timer needs, because
+    a headless run cannot click an approval prompt. Claude profiles are unchanged."""
+    env = dict(env)
+    if profile == "grok":
+        return ["grok", "-p", "--always-approve"], env
+    extra, env = model_args(profile, env, shim_url, local_name)
+    return ["claude", "-p", "--max-budget-usd", MAX_BUDGET, "--setting-sources", "project",
+            "--strict-mcp-config", "--allowedTools", ALLOWED, *extra], env
+
+
+def stream_flags(cmd: list[str]) -> list[str]:
+    """What `run_agent` appends so the CLI prints the event stream it already parses. Grok's matching format is
+    `streaming-messages-json` (session_id, result, usage); Claude's is `stream-json`."""
+    if cmd and cmd[0] == "grok":
+        return ["--output-format", "streaming-messages-json"]
+    return ["--output-format", "stream-json", "--verbose"]
 
 
 # What a failed run means for the owner. The first match wins; the text is Claude Code's result or stderr.
@@ -118,7 +140,7 @@ LOCAL_MAX_TURNS = 80
 HINTS = {
     "credit_exhausted": "The cloud credit or the usage limit is used up. Reply `/go model=local` to run this step on the "
                         "local model, or wait for the reset and reply `/go`.",
-    "auth": "Claude Code is not logged in on the factory host. Log in there (`claude /login`), then reply `/go`.",
+    "auth": "The agent CLI is not logged in on the factory host. Log in there (`claude /login` or `grok login`), then reply `/go`.",
     "stalled": "The model went in circles: its retrospectives showed no progress, or it used its turns without "
                "finishing. Reply `/go model=fast` to give this step to Claude, or `/go` to let the local model try again.",
     "rate_limit": "The model provider is rate limiting. Reply `/go` in a few minutes.",
@@ -292,10 +314,12 @@ def spec_prompt(n: int, repo: str, branch: str) -> str:
         f"write inside tests/holdout/; the factory moves the file to tests/holdout/test_issue_{n}.py after your run): "
         "one test per acceptance criterion, named after it, that fails on the current code and passes once the change "
         f"is built, using only the Contract. Run `uv run ruff format thoughts/{n}` and `uv run pytest "
-        f"thoughts/{n}/test_issue_{n}.py` (they should fail for the right reason: the change is missing, not a mistake "
-        "in the test). Put a comment `# AC<n>` on the line above each of those tests, with the number of the criterion it "
-        "checks: a mention in the docstring does not count, and a test that carries no such comment is matched by name to "
-        "an older issue's test. "
+        f"thoughts/{n}/test_issue_{n}.py` (they should fail for the right reason: the change is missing, not a "
+        "collection error or a mistake in the test). The tests must be self-contained (import from the app and "
+        "third-party packages only, never from tests/). In Python source write bytes and control characters as escapes "
+        "(b'\\x00', '\\r\\n'), never as raw characters. Put a comment `# AC<n>` on the line above each of those tests, "
+        "with the number of the criterion it checks: a mention in the docstring does not count, and a test that carries "
+        "no such comment is matched by name to an older issue's test. "
         "Read docs/intent.md and docs/architecture.md if they exist. In the spec's Intent section write `Serves:` (the "
         "goal G<n> this change moves, or `none`), `Touches:` (the N<n> and I<n> it comes near, or `none`) and "
         "`Decision needed from the owner before any code: yes` ONLY when the issue itself says a choice is still open "
@@ -471,19 +495,15 @@ PLACEHOLDER = re.compile(r"<(?:[a-z]+[ _-]){1,6}[a-z]+>")  # keep in step with o
 
 
 def tidy_spec_draft(wt: Path, n: int, head_before: str) -> list[str]:
-    """Repair what the spec step got wrong mechanically, instead of failing the whole draft (2026-11-22):
-    - files outside thoughts/N/ and tests/holdout/ are put back as they were (brevkoll#14 failed twice on this);
-    - NUL bytes are removed from the files it wrote (brevkoll#29: the holdout test file held NULs, pytest could not
-      read it, and no later step may touch the holdout tests, so the item could never pass).
-    Returns what was repaired, for the review guide."""
+    """Repair what the spec step got wrong mechanically, instead of failing the whole draft: files outside
+    thoughts/N/ and tests/holdout/ are put back as they were (brevkoll#14 failed twice on this). Broken test files are
+    not repaired here (brevkoll#29's held raw NUL and CR bytes where escapes were meant, and lost docstring quotes;
+    stripping bytes would change what a test checks): holdout_collect_problem() fails the draft instead, and the
+    retry writes them again. Returns what was repaired, for the review guide."""
     done = []
     changed = [f for f in run("git", "diff", "--name-only", f"{head_before}..HEAD", cwd=wt).splitlines() if f]
     for f in changed:
         if f.startswith((f"thoughts/{n}/", "tests/holdout/")):
-            path = wt / f
-            if path.is_file() and b"\0" in (raw := path.read_bytes()):
-                path.write_bytes(raw.replace(b"\0", b""))
-                done.append(f"removed NUL bytes from {f}")
             continue
         existed = subprocess.run(["git", "cat-file", "-e", f"{head_before}:{f}"], cwd=wt, capture_output=True).returncode == 0
         if existed:
@@ -777,7 +797,7 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
     `result` event (cost, turns, usage, session_id, text), or an error record when the run ends without one.
     interrupt: polled every few seconds; when it returns a reason (`stop`, `steer`, `loop`) the run is ended at once and
     the record says `interrupted: <reason>` with the session id, so the caller can resume the same session."""
-    proc = subprocess.Popen([*cmd, "--output-format", "stream-json", "--verbose"], stdin=subprocess.PIPE,
+    proc = subprocess.Popen([*cmd, *stream_flags(cmd)], stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=wt, env=env)
     assert proc.stdin and proc.stdout and proc.stderr
     proc.stdin.write(prompt)
@@ -823,9 +843,13 @@ def run_agent(cmd: list[str], prompt: str, wt: Path, env: dict[str, str], live: 
         timer.cancel()
         proc.wait()
         reader.join(5)
-    if why and result is None:  # a run that finished on its own is kept; the caller still sees a /stop
-        return {"interrupted": why[0], "session_id": sid, "is_error": True, "num_turns": len(msgs),
-                "result": f"interrupted: {why[0]}", **({k: result[k] for k in ("total_cost_usd", "usage")} if result else {})}
+    # A run that finished on its own is kept (the caller still sees a /stop). A run we killed is an interrupt even
+    # when the CLI still prints a result: grok answers SIGTERM with stop_reason "cancelled", and /steer must resume.
+    cancelled = bool(result) and (result.get("stop_reason") == "cancelled" or result.get("subtype") == "error_during_execution")
+    if why and (result is None or cancelled):
+        kept = {k: result[k] for k in ("total_cost_usd", "usage") if result and k in result}
+        return {"interrupted": why[0], "session_id": sid or (result or {}).get("session_id"), "is_error": True,
+                "num_turns": len(msgs), "result": f"interrupted: {why[0]}", **kept}
     if result is None:
         why_end = f"timed out after {TIMEOUT_S // 60} min" if time.time() >= deadline else "ended without a result"
         result = {"result": f"{why_end}\n" + "\n".join(other)[-2000:] + "".join(err)[-1000:], "is_error": True,
@@ -1166,10 +1190,11 @@ def main() -> None:
         prompt = plan_revision_prompt(n, args.repo, branch) if args.note else prompt + " " + NO_CONDITIONAL_PHASES
     if step == "spec":
         prompt = spec_prompt(n, args.repo, branch)
+    if args.model == "grok":
+        prompt += ("\nYour own skills and instructions apply. A tool named above that you do not have "
+                   "(TaskCreate, TaskUpdate) can be skipped.")
     shim, shim_url, served = start_shim() if args.model == "local" else (None, None, "")
-    extra, env = model_args(args.model, agent_env(), shim_url, served)
-    base_cmd = ["claude", "-p", "--max-budget-usd", MAX_BUDGET,
-                "--setting-sources", "project", "--strict-mcp-config", "--allowedTools", ALLOWED, *extra]
+    base_cmd, env = cli_for(args.model, agent_env(), shim_url, served)
     live = Live(WORK, args.repo, n, step, args.model, wt, url=f"{g.repo_url(repo).removesuffix('.git')}/issues/{n}")
     state = WORK / "state"
 
@@ -1265,7 +1290,7 @@ def main() -> None:
         tail = str(result.get("result"))[-500:]
         kind = classify(tail)
         digest = retro_digest(retros)
-        die(f"claude run failed (see data/agent_runs.jsonl). Tail: {tail}"
+        die(f"agent run failed (see data/agent_runs.jsonl). Tail: {tail}"
             + (f"\nRetrospectives:\n{digest}" if digest else "")
             + (f"\n[class: {kind}] {HINTS[kind]}" if kind else ""))
 
@@ -1341,8 +1366,9 @@ def main() -> None:
     summary = str(result.get("result", ""))[:3500]
     changed = run("git", "diff", "--name-only", f"{head_before}..HEAD", cwd=wt).splitlines()
     links = changed_file_links(g.repo_url(repo), branch, changed, n)
-    spent = (f"local model, no cloud tokens; ${record['cost_usd']:.2f} at `fast` prices, ~{record['energy_kwh']:.2f} kWh"
-             if args.model == "local" else f"cost {record['cost_usd']} USD")
+    cost = record["cost_usd"]
+    spent = (f"local model, no cloud tokens; ${cost:.2f} at `fast` prices, ~{record['energy_kwh']:.2f} kWh"
+             if args.model == "local" else f"cost {cost} USD" if cost is not None else "cost not reported")
     icon = {"completed": "✅", "in_progress": "▶️"}
     tasks = "".join(f"- {icon.get(t['status'], '⬜')} {t['text']}\n" for t in live.state["todos"])
     tasks = f"**Task list**\n{tasks}\n" if tasks else ""

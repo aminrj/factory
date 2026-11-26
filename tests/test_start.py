@@ -67,6 +67,14 @@ class StartTests(unittest.TestCase):
         self.adopt.assert_called_once()
         self.assertEqual(self.adopt.call_args.kwargs["go"]["id"], go["id"])
 
+    def test_auto_model_grok_starts_and_does_not_stop_at_the_plan(self) -> None:
+        opts = orchestrate.command_options("/auto model=grok")
+        self.assertEqual((opts.model, opts.tier, opts.errors), ("grok", "auto", []))
+        self.assertIsNone(orchestrate.command_options("/go model=grok").tier)
+        go = self.g.comment("owner/app", 1, "/auto model=grok")
+        self.assertEqual(self.process(), "started")
+        self.assertEqual(self.adopt.call_args.kwargs["go"]["id"], go["id"])
+
     def test_a_plain_comment_starts_nothing(self) -> None:
         self.g.comment("owner/app", 1, "I saw this on Firefox too.")
         self.assertEqual(self.process(), "waiting")
