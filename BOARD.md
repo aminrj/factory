@@ -1,12 +1,12 @@
 # Board
 
-_Generated 2026-11-23 20:50 UTC by `scripts/collect_metrics.py`._
+_Generated 2026-11-26 15:55 UTC by `scripts/collect_metrics.py`._
 
 ## Waiting for you
 
 | Where | Checkpoint | Since | Hours |
 |---|---|---|---|
-| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 25.7 |
+| brevkoll#7 | after_gate3-retry: a step failed | 2026-11-22T19:10+00:00 | 92.8 |
 
 ## idea
 
@@ -18,7 +18,7 @@ _Generated 2026-11-23 20:50 UTC by `scripts/collect_metrics.py`._
 
 | Item | Issue |
 |---|---|
-| (none) | |
+| Small gaps from the v1 validation report | brevkoll#8 |
 
 ## building
 
